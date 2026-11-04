@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>La Oficina de IA de Sergio</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%2314101f'/><rect x='4' y='10' width='24' height='18' fill='%23e0632f'/><rect x='12' y='18' width='8' height='10' fill='%23ffd257'/></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">▚▞</span>
+      <div>
+        <h1>La Oficina de IA de Sergio</h1>
+        <p class="tagline">Habbo de IAs · build 0.3 premium — una sola planta, tu cuarto incluido</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span id="clock" class="clock">--:--:--</span>
+      <button id="btn-pause" class="btn" type="button">Pausar</button>
+      <button id="btn-scatter" class="btn" type="button">Repartir</button>
+      <button id="btn-sound" class="btn" type="button" aria-pressed="false">Sonido: off</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div class="canvas-wrap">
+      <canvas id="sala" width="1060" height="640" role="img" aria-label="Sala isométrica pixel-art: la oficina de Sergio con Sergio, Qwen, Pulse y Gemini trabajando"></canvas>
+      <div class="scanlines" aria-hidden="true"></div>
+      <p class="hint">Haz clic en un personaje para ver su ficha · tu cuarto está a la derecha del tabique</p>
+    </div>
+
+    <aside class="panel" aria-label="Panel de la oficina">
+      <section class="roster">
+        <h2>Plantilla</h2>
+        <ul id="roster-list"></ul>
+      </section>
+
+      <section class="ficha" id="ficha">
+        <h2>Ficha</h2>
+        <div id="ficha-body" class="ficha-empty">
+          <p>Ningún personaje seleccionado.</p>
+          <p class="ficha-sub">Haz clic en alguien de la sala para ver quién es y qué hace.</p>
+        </div>
+      </section>
+
+      <section class="leyenda">
+        <h2>Estado (simulado)</h2>
+        <ul class="legend-list">
+          <li><span class="dot typing"></span> Tecleando</li>
+          <li><span class="dot walking"></span> Caminando</li>
+          <li><span class="dot coffee"></span> En la cafetera</li>
+          <li><span class="dot thinking"></span> Pensando</li>
+        </ul>
+        <p class="note">Los estados son ficticios por ahora. El siguiente hito: estado real vía Ollama <code>/api/ps</code>, API de OpenCode y logs de dsh/Antigravity.</p>
+      </section>
+    </aside>
+  </main>
+
+  <script src="oficina.js"></script>
+</body>
+</html>
