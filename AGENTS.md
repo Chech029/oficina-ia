@@ -69,8 +69,15 @@ Arreglado:
 2. **Depth sort del tabique**: el cuerpo se trocea en tramos de 0.5 unidades y entra en la lista ordenada por `x + y`; postes, dintel y placa SERGIO se dibujan por separado.
 3. **Roster sin parpadeo**: se construye una vez y solo se actualiza el estado y la clase `active`.
 
+Validado visualmente el **2026-11-04** con `~/Imágenes/Screenshots/Screenshot_2026-11-04_08-39-03.png`:
+
+- Sergio visible en su cuarto, junto al escritorio y la lámpara.
+- Tabique sin líneas sueltas en el hueco de la puerta; patrón de paneles continuo.
+- Postes, dintel y placa SERGIO visibles.
+- Roster sin parpadeo y clics funcionando.
+
 Pendiente:
 
 4. El servidor 8080 no siempre está levantado.
 5. **Hito 2**: estados reales vía Ollama `/api/ps`, API de OpenCode y logs de Antigravity.
-6. **Validación visual** de los fixes con captura del usuario (no hay navegador headless).
+6. Detalles menores (no bloquean): el poste de la puerta tiene base dorada, no zócalo oscuro (diseño original); el depth sort de NPCs puede fallar en el borde de ~0.2 tiles junto al tabique, no visible en la captura.
