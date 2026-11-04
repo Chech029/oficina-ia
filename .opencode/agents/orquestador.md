@@ -9,6 +9,9 @@ permissions:
     resource: "*"
     effect: deny
   - action: edit
+    resource: "*.md"
+    effect: allow
+  - action: edit
     resource: "**/*.md"
     effect: allow
   - action: shell

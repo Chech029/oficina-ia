@@ -3,7 +3,7 @@ description: Ingeniero de implementación. Edita código del proyecto (oficina.j
 mode: subagent
 model: opencode/pulse-alpha-free#high
 color: "#a78bfa"
-steps: 16
+steps: 24
 permissions:
   - action: edit
     resource: "*"
@@ -13,13 +13,13 @@ permissions:
     effect: allow
   - action: shell
     resource: "rm *"
-    effect: ask
+    effect: deny
   - action: shell
     resource: "git push*"
-    effect: ask
+    effect: deny
   - action: shell
     resource: "git reset --hard*"
-    effect: ask
+    effect: deny
   - action: subagent
     resource: "*"
     effect: deny

@@ -3,7 +3,7 @@ description: Revisor de código. Lee cambios y reporta hallazgos por severidad s
 mode: subagent
 model: opencode/flint-40b-free#high
 color: "#ff7eb6"
-steps: 8
+steps: 14
 permissions:
   - action: read
     resource: "*"

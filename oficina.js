@@ -289,50 +289,81 @@ function drawWalls() {
   ctx.restore();
 }
 
-/* Tabique con puerta: separa el cuarto de Sergio del resto del render */
-function drawPartition() {
-  const segs = [
-    { y0: 0, y1: DOOR_Y0 },
-    { y0: DOOR_Y1, y1: MAP_H },
-  ];
-  for (const s of segs) {
-    const p0 = iso(PART_X, s.y0), p1 = iso(PART_X, s.y1);
-    const slope = (p1.y - p0.y) / (p1.x - p0.x);
-    const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-    ctx.save();
-    ctx.translate(p0.x, p0.y);
-    ctx.transform(1, slope, 0, 1, 0, 0);
-    // cuerpo de nogal oscuro con paneles
-    const g = ctx.createLinearGradient(0, -WALL_H, 0, 0);
-    g.addColorStop(0, '#54402a'); g.addColorStop(1, '#34241566'.slice(0,7));
-    ctx.fillStyle = g; ctx.fillRect(0, -WALL_H, len, WALL_H);
-    // paneles: moldeuras verticales + paneles rectangulares
-    ctx.fillStyle = '#241510';
-    for (let x = 14; x < len - 10; x += 46) {
-      ctx.fillRect(x - 6, -WALL_H + 14, 3, WALL_H - 34);
-      ctx.strokeStyle = '#5e422c'; ctx.lineWidth = 2;
-      ctx.strokeRect(x, -WALL_H + 16, 32, (WALL_H - 44) / 2);
-      ctx.strokeRect(x, -WALL_H + 24 + (WALL_H - 44) / 2, 32, (WALL_H - 44) / 2);
+/* Tabique con puerta: separa el cuarto de Sergio del resto del render.
+   El cuerpo se trocea en tramos para integrarlo en el depth sort de render():
+   profundidad = PART_X + y (la profundidad iso es x + y). */
+const PART_UNIT = Math.hypot(iso(PART_X, 1).x - iso(PART_X, 0).x, iso(PART_X, 1).y - iso(PART_X, 0).y);
+
+function drawPartitionBody(y0, y1) {
+  const p0 = iso(PART_X, y0), p1 = iso(PART_X, y1);
+  const slope = (p1.y - p0.y) / (p1.x - p0.x);
+  const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+  const s0 = y0 * PART_UNIT;  // longitud acumulada desde y=0 (patrón continuo entre tramos)
+  ctx.save();
+  ctx.translate(p0.x, p0.y);
+  ctx.transform(1, slope, 0, 1, 0, 0);
+  // cuerpo de nogal oscuro con paneles
+  const g = ctx.createLinearGradient(0, -WALL_H, 0, 0);
+  g.addColorStop(0, '#54402a'); g.addColorStop(1, '#342415');
+  ctx.fillStyle = g; ctx.fillRect(0, -WALL_H, len, WALL_H);
+  // paneles: moldeuras verticales + paneles rectangulares (alineados al tramo global).
+  // Clip al rectángulo del cuerpo para no pintar sobre la puerta ni el tramo vecino.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, -WALL_H, len, WALL_H);
+  ctx.clip();
+  ctx.fillStyle = '#241510';
+  for (let x = 14 - (s0 % 46); x < len - 10; x += 46) {
+    ctx.fillRect(x - 6, -WALL_H + 14, 3, WALL_H - 34);
+    ctx.strokeStyle = '#5e422c'; ctx.lineWidth = 2;
+    ctx.strokeRect(x, -WALL_H + 16, 32, (WALL_H - 44) / 2);
+    ctx.strokeRect(x, -WALL_H + 24 + (WALL_H - 44) / 2, 32, (WALL_H - 44) / 2);
+  }
+  ctx.restore();
+  // línea de oro (rail) y coronilla
+  ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, -44); ctx.lineTo(len, -44); ctx.stroke();
+  ctx.fillStyle = '#17100a'; ctx.fillRect(0, -WALL_H, len, 6);
+  // zócalo
+  ctx.fillStyle = '#17100a'; ctx.fillRect(0, -8, len, 8);
+  ctx.restore();
+}
+
+/* Trocea [0,DOOR_Y0] y [DOOR_Y1,MAP_H] en tramos de <= TRAMO_LEN.
+   Pegado a cada borde de la puerta queda un tramo pequeño para que el
+   depth del cuerpo vecino quede por debajo del de los postes y estos
+   se dibujen completos encima. */
+const TRAMO_LEN = 0.5;
+const DOOR_TAB = 0.08;
+function partTramos() {
+  const tramos = [];
+  const add = (a, b) => {
+    let y = a;
+    while (y < b - 0.001) {
+      const y1 = Math.min(b, y + TRAMO_LEN);
+      tramos.push({ y0: y, y1 });
+      y = y1;
     }
-    // línea de oro (rail) y coronilla
-    ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(0, -44); ctx.lineTo(len, -44); ctx.stroke();
-    ctx.fillStyle = '#17100a'; ctx.fillRect(0, -WALL_H, len, 6);
-    // zócalo
-    ctx.fillStyle = '#17100a'; ctx.fillRect(0, -8, len, 8);
-    ctx.restore();
-  }
-  // postes de la puerta + dintel con placa de latón
-  const postH = WALL_H;
-  for (const gy of [DOOR_Y0, DOOR_Y1]) {
-    const p = iso(PART_X, gy);
-    ctx.fillStyle = '#1c110a';
-    ctx.fillRect(p.x - 5, p.y - postH, 10, postH);
-    ctx.fillStyle = '#c9a227';
-    ctx.fillRect(p.x - 5, p.y - postH, 10, 4);
-    ctx.fillRect(p.x - 6, p.y - 4, 12, 3);
-  }
-  // dintel sobre el hueco
+  };
+  add(0, DOOR_Y0 - DOOR_TAB);
+  tramos.push({ y0: DOOR_Y0 - DOOR_TAB, y1: DOOR_Y0 });
+  tramos.push({ y0: DOOR_Y1, y1: DOOR_Y1 + DOOR_TAB });
+  add(DOOR_Y1 + DOOR_TAB, MAP_H);
+  return tramos;
+}
+
+/* Poste de la puerta (arista de latón) */
+function drawPartitionPost(gy) {
+  const p = iso(PART_X, gy);
+  ctx.fillStyle = '#1c110a';
+  ctx.fillRect(p.x - 5, p.y - WALL_H, 10, WALL_H);
+  ctx.fillStyle = '#c9a227';
+  ctx.fillRect(p.x - 5, p.y - WALL_H, 10, 4);
+  ctx.fillRect(p.x - 6, p.y - 4, 12, 3);
+}
+
+/* Dintel + placa de latón SERGIO (pasa por delante del que cruza la puerta) */
+function drawPartitionLintel() {
   const d0 = iso(PART_X, DOOR_Y0), d1 = iso(PART_X, DOOR_Y1);
   const slope = (d1.y - d0.y) / (d1.x - d0.x);
   const len = Math.hypot(d1.x - d0.x, d1.y - d0.y);
@@ -349,6 +380,13 @@ function drawPartition() {
   ctx.textAlign = 'left';
   ctx.restore();
 }
+
+/* Tramos del tabique precalculados una vez (profundidad = x + y); los closures capturan y0/y1 estables */
+const partitionDraws = [
+  ...partTramos().map(s => ({ depth: PART_X + (s.y0 + s.y1) / 2, draw: () => drawPartitionBody(s.y0, s.y1) })),
+  { depth: PART_X + DOOR_Y0, draw: () => drawPartitionPost(DOOR_Y0) },
+  { depth: PART_X + DOOR_Y1 + 0.05, draw: () => { drawPartitionPost(DOOR_Y1); drawPartitionLintel(); } },
+];
 
 /* ── Mobiliario ───────────────────────────────────────────── */
 function drawDesk(d, t) {
@@ -593,7 +631,19 @@ function updateNPC(n, dt, t) {
     const dx = n.tx - n.x, dy = n.ty - n.y, dist = Math.hypot(dx, dy);
     if (dist < 0.06) { n.state = n.onArrive || 'think'; n.timer = rand(3, 7); return; }
     const step = Math.min(dist, SPEED * dt);
-    n.x += (dx / dist) * step; n.y += (dy / dist) * step;
+    let nx = n.x + (dx / dist) * step;
+    let ny = n.y + (dy / dist) * step;
+    // El tabique solo se cruza por la puerta: si el paso cruza PART_X fuera de
+    // la franja, bloqueamos x y deslizamos en y hacia el centro de la puerta.
+    const doorC = (DOOR_Y0 + DOOR_Y1) / 2;
+    const cruza = (n.x < PART_X) !== (nx < PART_X);
+    const enFranja = ny >= DOOR_Y0 && ny <= DOOR_Y1;
+    if (cruza && !enFranja) {
+      // deslice monótono hacia el centro: no oscila y acaba entrando en la puerta
+      ny = n.y + clamp(doorC - n.y, -step, step);
+      nx = n.x;
+    }
+    n.x = nx; n.y = ny;
     n.facing = (dx - dy) >= 0 ? 1 : -1;
   } else {
     n.timer -= dt;
@@ -717,7 +767,6 @@ function render(t) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawWalls();
   drawFloor();
-  drawPartition();
   // sconces (artefactos) en pared izquierda
   const A = iso(0, 0), B = iso(0, MAP_H);
   for (const f of [0.28, 0.62]) {
@@ -725,8 +774,10 @@ function render(t) {
     ctx.fillStyle = '#3a2c14'; ctx.fillRect(x - 6, y - 3, 12, 6);
     ctx.fillStyle = '#ffb64f'; ctx.fillRect(x - 4, y - 1, 8, 2);
   }
+  // el tabique entra en el depth sort por tramos (partitionDraws, precalculado)
   const drawables = [
     ...furniture,
+    ...partitionDraws,
     ...npcs.map(n => ({ depth: n.x + n.y + 0.2, draw: () => drawNPC(n, t) })),
   ].sort((a, b) => a.depth - b.depth);
   for (const d of drawables) d.draw(t);
@@ -776,12 +827,16 @@ canvas.addEventListener('click', evt => {
 
 const statusOf = n => STATUS[n.state === 'move' ? 'move' : n.state] || 'Tecleando';
 
-function renderRoster() {
+/* ── Panel lateral: roster ─────────────────────────────────── */
+/* Se construye UNA vez; cada tick solo actualiza texto de estado y la clase
+   `active` para no recrear el DOM ni perder clics. */
+let rosterBuilt = false;
+function buildRoster() {
   const ul = document.getElementById('roster-list');
   ul.innerHTML = '';
   for (const n of npcs) {
     const li = document.createElement('li');
-    li.className = 'roster-item' + (selected === n ? ' active' : '');
+    li.className = 'roster-item';
     const mini = document.createElement('canvas');
     mini.width = 48; mini.height = 60; mini.className = 'avatar-mini';
     const mg = mini.getContext('2d');
@@ -795,7 +850,16 @@ function renderRoster() {
     st.className = 'status'; st.textContent = statusOf(n);
     li.appendChild(st);
     li.addEventListener('click', () => { selected = n; n.waveUntil = now() + 1200; renderFicha(); renderRoster(); blip(); });
+    n.rosterLi = li; n.rosterStatus = st;
     ul.appendChild(li);
+  }
+  rosterBuilt = true;
+}
+function renderRoster() {
+  if (!rosterBuilt) buildRoster();
+  for (const n of npcs) {
+    if (n.rosterStatus) n.rosterStatus.textContent = statusOf(n);
+    if (n.rosterLi) n.rosterLi.classList.toggle('active', selected === n);
   }
 }
 function renderFicha() {

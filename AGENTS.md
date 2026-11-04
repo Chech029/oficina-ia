@@ -61,10 +61,16 @@ Si no existe, recrearlo o pedir permiso antes de asumir que pasó.
 | `gemini-qa` | subagent | QA visual, capturas y accesibilidad; solo lectura. |
 | `revisor` | subagent | Code review por severidad; no edita. |
 
-## Deudas conocidas (build 0.3)
+## Estado de la build 0.3 (tras los fixes)
 
-1. **El tabique no colisiona**: los NPCs lo atraviesan fuera de la puerta (`DOOR_Y0..DOOR_Y1`).
-2. **Orden de dibujo del tabique**: `drawPartition()` se pinta antes que los NPCs; un NPC dentro del cuarto queda siempre delante.
-3. `renderRoster()` reconstruye todo el DOM cada 800 ms (parpadeo y clics perdidos).
+Arreglado:
+
+1. **Colisión del tabique**: los NPCs solo cruzan `PART_X` por la franja de la puerta (`DOOR_Y0..DOOR_Y1`); fuera de ella se deslizan hacia el centro de la puerta.
+2. **Depth sort del tabique**: el cuerpo se trocea en tramos de 0.5 unidades y entra en la lista ordenada por `x + y`; postes, dintel y placa SERGIO se dibujan por separado.
+3. **Roster sin parpadeo**: se construye una vez y solo se actualiza el estado y la clase `active`.
+
+Pendiente:
+
 4. El servidor 8080 no siempre está levantado.
-5. **Hito 2 pendiente**: estados reales vía Ollama `/api/ps`, API de OpenCode y logs de Antigravity.
+5. **Hito 2**: estados reales vía Ollama `/api/ps`, API de OpenCode y logs de Antigravity.
+6. **Validación visual** de los fixes con captura del usuario (no hay navegador headless).
