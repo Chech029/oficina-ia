@@ -1,923 +1,1017 @@
 /* ============================================================
-   La Oficina de IA de Sergio — Premium (build 0.3)
-   Una única escena compartida con un CUARTO PROPIO para Sergio
-   (despacho privado con tabique + puerta) dentro del mismo render.
-   Moderno cálido: nogal, latón, cuero, luz ámbar + acentos teal.
-   Sin dependencias · estado simulado (hito 2: datos reales)
+   Laboratorio de IA de Sergio · Centro de Control 2D
+   Vista 2D Top-Down · Integración Real con Ollama (localhost:11434)
+   JavaScript Puro · Canvas HTML5 · WebAudio 8-Bit · Sin Dependencias
    ============================================================ */
+
 'use strict';
 
-/* ── Base ─────────────────────────────────────────────────── */
+// ── Configuración y Canvas ────────────────────────────────────
 const canvas = document.getElementById('sala');
 const ctx = canvas.getContext('2d');
 ctx.imageSmoothingEnabled = false;
 
-const TILE_W = 64, TILE_H = 32, MAP_W = 12, MAP_H = 9, WALL_H = 88;
-const ORIGIN_X = canvas.width / 2, ORIGIN_Y = 102;
-const SPEED = 1.35;
-const PART_X = 8.35;              // tabique del despacho
-const DOOR_Y0 = 4.15, DOOR_Y1 = 5.45;  // hueco de la puerta
+const TILE = 32;       // 32x32 píxeles por tile
+const COLS = 25;       // 25 * 32 = 800px ancho
+const ROWS = 15;       // 15 * 32 = 480px alto
 
-function iso(gx, gy) {
-  return { x: ORIGIN_X + (gx - gy) * (TILE_W / 2), y: ORIGIN_Y + (gx + gy) * (TILE_H / 2) };
+// ── Estado de la simulación ────────────────────────────────────
+let isPaused = false;
+let soundEnabled = false;
+let globalTick = 0;
+let activeDialogueTimeout = null;
+
+// Telemetría de Ollama en tiempo real
+let ollamaOnline = false;
+let activeModelName = 'qwen2.5-coder:1.5b';
+let ollamaIsProcessing = false;
+
+// Elementos de la interfaz
+const dialogueBox = document.getElementById('dialogue-box');
+const dialogueSpeaker = document.getElementById('dialogue-speaker');
+const dialogueText = document.getElementById('dialogue-text');
+const btnSound = document.getElementById('btn-sound');
+const btnPause = document.getElementById('btn-pause');
+const ollamaDot = document.getElementById('ollama-dot');
+const ollamaStatusText = document.getElementById('ollama-status-text');
+const promptForm = document.getElementById('prompt-form');
+const promptInput = document.getElementById('prompt-input');
+
+// ── Audio 8-Bit Retro (Web Audio API) ──────────────────────────
+let audioCtx = null;
+
+function initAudio() {
+  if (!audioCtx) {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (AudioContext) audioCtx = new AudioContext();
+  }
 }
-function now() { return performance.now(); }
-function rand(min, max) { return min + Math.random() * (max - min); }
-function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-function roundRect(x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
+
+function playBip(freq = 620, duration = 0.04) {
+  if (!soundEnabled || !audioCtx) return;
+  try {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  } catch (e) {}
 }
 
-/* ── Sprites pixel-art (16×20, ×3) ────────────────────────── */
-function makeSprite(spec, frame) {
-  const c = document.createElement('canvas');
-  c.width = 16; c.height = 20;
-  const g = c.getContext('2d');
-  const px = (x, y, w, h, col) => { g.fillStyle = col; g.fillRect(x, y, w, h); };
-  const legShift = frame === 0 ? -1 : 1;
+function playFanfare() {
+  if (!soundEnabled || !audioCtx) return;
+  const notes = [440, 554, 659, 880];
+  notes.forEach((freq, idx) => {
+    setTimeout(() => playBip(freq, 0.08), idx * 70);
+  });
+}
 
-  if (spec.kind === 'human') {
-    if (spec.curly) {
-      px(3, 0, 10, 2, spec.hair);
-      px(2, 1, 2, 2, spec.hair); px(5, 0, 2, 1, spec.hair); px(8, 0, 2, 1, spec.hair); px(12, 1, 2, 2, spec.hair);
-      px(3, 2, 10, 1, spec.hair);
-      px(4, 3, 1, 2, spec.hair); px(11, 3, 1, 2, spec.hair);
+// ── Sistema de Diálogo Retro con efecto máquina de escribir ───
+function showDialogue(speaker, text, color = '#0284c7') {
+  initAudio();
+  dialogueSpeaker.textContent = speaker.toUpperCase();
+  dialogueSpeaker.style.background = color;
+  
+  if (activeDialogueTimeout) {
+    clearInterval(activeDialogueTimeout);
+    activeDialogueTimeout = null;
+  }
+
+  dialogueText.textContent = '';
+  let i = 0;
+  playBip(520, 0.06);
+
+  activeDialogueTimeout = setInterval(() => {
+    if (i < text.length) {
+      dialogueText.textContent += text.charAt(i);
+      if (i % 2 === 0 && text.charAt(i) !== ' ') {
+        playBip(480 + (i % 4) * 40, 0.025);
+      }
+      i++;
     } else {
-      px(4, 1, 8, 2, spec.hair);
-      px(4, 3, 1, 3, spec.hair); px(11, 3, 1, 3, spec.hair);
+      clearInterval(activeDialogueTimeout);
+      activeDialogueTimeout = null;
     }
-    px(4, 2, 8, 5, spec.skin);
-    if (spec.curly) { px(3, 2, 2, 1, spec.skin); px(11, 2, 2, 1, spec.skin); }
-    px(5, 4, 1, 1, '#1f150e');
-    px(10, 4, 1, 1, '#1f150e');
-    px(6, 6, 4, 1, spec.beard);
-    px(3, 7, 10, 7, spec.hoodie);
-    px(3, 7, 10, 1, spec.hoodieDark);
-    px(6, 7, 4, 4, spec.tee);
-    px(2, 8, 1, 5, spec.hoodieDark);
-    px(13, 8, 1, 5, spec.hoodieDark);
-    px(4, 12, 8, 1, '#00000033');
-    px(4 + legShift, 14, 3, 4, spec.pants);
-    px(9 - legShift, 14, 3, 4, spec.pants);
-    px(4 + legShift, 18, 3, 2, spec.shoes);
-    px(9 - legShift, 18, 3, 2, spec.shoes);
-  } else {
-    px(6, 0, 4, 1, spec.antenna);
-    px(7, 1, 2, 1, spec.antennaTip);
-    px(4, 2, 8, 5, spec.head);
-    px(4, 6, 8, 1, spec.headDark);
-    px(5, 4, 2, 1, spec.eyes);
-    px(9, 4, 2, 1, spec.eyes);
-    px(3, 7, 10, 7, spec.body);
-    px(3, 7, 10, 1, spec.bodyDark);
-    px(2, 8, 1, 5, spec.bodyDark);
-    px(13, 8, 1, 5, spec.bodyDark);
-    spec.emblem(px);
-    px(4 + legShift, 14, 3, 4, spec.pants);
-    px(9 - legShift, 14, 3, 4, spec.pants);
-    px(4 + legShift, 18, 3, 2, spec.feet);
-    px(9 - legShift, 18, 3, 2, spec.feet);
-  }
-  const scaled = document.createElement('canvas');
-  scaled.width = 48; scaled.height = 60;
-  const sg = scaled.getContext('2d');
-  sg.imageSmoothingEnabled = false;
-  sg.drawImage(c, 0, 0, 48, 60);
-  return scaled;
+  }, 18);
 }
 
-/* ── Cast ─────────────────────────────────────────────────── */
-const CAST = [
-  {
-    id: 'sergio', name: 'Sergio', role: 'Jefe de la oficina · humano',
-    represents: 'Tú (la persona real)', model: '—', hw: 'pop-os · tu portátil',
-    desc: 'El humano al mando: revisa lo que proponen las IAs, decide qué se sube y qué no. Moreno, pelo rizado, ahora con su propio cuarto dentro de la planta.',
-    spec: { kind: 'human', curly: true, skin: '#a06a42', hair: '#221610', beard: '#1a110b',
-      hoodie: '#33415c', hoodieDark: '#22304a', tee: '#e0a43c', pants: '#3f3f46', shoes: '#141416' },
-    home: { x: 10.3, y: 2.45 }, accent: '#e0a43c',
-    phrases: ['¿Alguien revisó los tests?', 'Esto lo despliego yo.', '¿Qué dice el diff?', 'Café antes de mergear.', 'No toquéis main a las 2am.'],
-    cornerPhrases: ['Mi cuarto.', 'Que el pipeline espere.', 'Ni un correo hasta las 6.', 'Esto huele a deploy tranquilo.', 'Chinchín virtual por este merge.'],
+// ── Paleta de Colores Técnica ─────────────────────────────────
+const PAL = {
+  // Suelos y Paredes
+  wallTop: '#1e293b',
+  wallFront: '#334155',
+  wallTrim: '#0f172a',
+  labFloor1: '#e2e8f0',
+  labFloor2: '#cbd5e1',
+  labBorder: '#94a3b8',
+  
+  // Despacho de Sergio (Nogal y Caoba)
+  officeWood: '#78350f',
+  officeWoodDark: '#451a03',
+  carpetRed: '#881337',
+  carpetBorder: '#f59e0b',
+  partitionWood: '#5c2d11',
+  partitionTrim: '#d97706',
+  
+  // Muebles
+  deskBody: '#64748b',
+  deskTop: '#94a3b8',
+  deskWood: '#5a2d14',
+  deskWoodTop: '#7c3f1d',
+  monitorCase: '#cbd5e1',
+  monitorScreenGreen: '#22c55e',
+  monitorScreenBlue: '#38bdf8',
+  chairLeather: '#991b1b',
+  serverCase: '#0f172a',
+  plantGreen: '#15803d',
+  plantPot: '#b45309',
+  
+  // Personajes
+  skinTone: '#c68642',
+  hairDark: '#17120e',
+  blazerNavy: '#1e3a8a',
+  shirtWhite: '#f8fafc',
+  pantsDark: '#0f172a'
+};
+
+// ── Definición de Personajes ──────────────────────────────────
+const CHARACTERS = {
+  sergio: {
+    id: 'sergio',
+    name: 'Sergio',
+    role: 'Jefe & Arquitecto de Software',
+    x: 20,
+    y: 5,
+    color: '#0284c7',
+    state: 'working',
+    dialogues: [
+      "¡Equipo, el objetivo es mantener el sistema ágil, limpio y 100% bajo control!",
+      "Qwen, confirma que Ollama esté corriendo sin consumir recursos de más.",
+      "Excelente trabajo con la arquitectura 2D. Sin dependencias externas se trabaja mucho mejor.",
+      "Pueden escribirle un prompt a Qwen en la barra inferior para probar el modelo local."
+    ],
+    draw(cx, cy, frame) {
+      const px = (x, y, w, h, col) => { ctx.fillStyle = col; ctx.fillRect(cx + x, cy + y, w, h); };
+      const bob = (this.state === 'working' && Math.sin(frame * 0.15) > 0) ? 1 : 0;
+
+      // Sombra
+      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      ctx.beginPath();
+      ctx.ellipse(cx + 16, cy + 30, 10, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Pelo rizado oscuro (moreno)
+      px(8, 2 - bob, 16, 8, PAL.hairDark);
+      px(6, 4 - bob, 3, 5, PAL.hairDark);
+      px(23, 4 - bob, 3, 5, PAL.hairDark);
+      px(10, 0 - bob, 12, 3, PAL.hairDark);
+
+      // Cara
+      px(9, 6 - bob, 14, 10, PAL.skinTone);
+      px(12, 9 - bob, 2, 3, '#111');
+      px(18, 9 - bob, 2, 3, '#111');
+      px(13, 9 - bob, 1, 1, '#fff');
+      px(19, 9 - bob, 1, 1, '#fff');
+      px(15, 13 - bob, 3, 1, '#663b15');
+
+      // Cuello y Camisa blanca
+      px(13, 16, 6, 4, PAL.shirtWhite);
+
+      // Blazer Navy elegante
+      px(8, 17, 16, 9, PAL.blazerNavy);
+      px(14, 18, 4, 8, PAL.shirtWhite);
+      px(7, 18, 3, 6, PAL.blazerNavy);
+      px(22, 18, 3, 6, PAL.blazerNavy);
+      px(7, 24, 3, 3, PAL.skinTone);
+      px(22, 24, 3, 3, PAL.skinTone);
+
+      // Pantalón y Zapatos
+      px(10, 26, 5, 4, PAL.pantsDark);
+      px(17, 26, 5, 4, PAL.pantsDark);
+      px(9, 29, 6, 3, '#111');
+      px(17, 29, 6, 3, '#111');
+
+      if (this.state === 'talking') {
+        drawSpeechBubble(cx + 12, cy - 8, '💬');
+      }
+    }
   },
-  {
-    id: 'qwen', name: 'Qwen', role: 'Asistente local · Ollama',
-    represents: 'qwen2.5-coder:1.5b', model: 'Qwen2.5 Coder 1.5B · Q4_K_M · ctx 32k', hw: 'Tu máquina (Ollama, offline)',
-    desc: 'El becario que nunca sale de la oficina: corre 100% en local, gratis y sin internet. Ideal para explicar archivos y borradores. El razonamiento profundo no es lo suyo.',
-    spec: { kind: 'robot', head: '#d8f3e3', headDark: '#8fd4ac', eyes: '#16a34a',
-      antenna: '#8fd4ac', antennaTip: '#57f287', body: '#2fbf71', bodyDark: '#1f8f4f',
-      pants: '#155e37', feet: '#0d3a21',
-      emblem(px) { px(6, 10, 4, 3, '#1f8f4f'); px(7, 11, 1, 1, '#57f287'); px(9, 11, 1, 1, '#57f287'); } },
-    home: { x: 2.95, y: 3.55 }, accent: '#35d07f',
-    phrases: ['Procesando en local…', '0 tokens gastados.', '¿Corro esto offline?', '1.5B y con actitud.', 'Para y piensa…'],
+
+  qwen: {
+    id: 'qwen',
+    name: 'Qwen Local',
+    role: 'IA Local (Ollama)',
+    x: 4,
+    y: 5,
+    color: '#16a34a',
+    state: 'working',
+    dialogues: [
+      "¡Modelo qwen2.5-coder:1.5b cargado en Ollama! Listo para escribir código offline.",
+      "Cero tokens gastados en la nube. 100% privacidad y ejecución local.",
+      "Puedes escribirme un prompt abajo en la barra de comandos para poner a prueba mi velocidad.",
+      "Procesando solicitudes en tu máquina a máxima velocidad."
+    ],
+    draw(cx, cy, frame) {
+      const px = (x, y, w, h, col) => { ctx.fillStyle = col; ctx.fillRect(cx + x, cy + y, w, h); };
+      const isTyping = (this.state === 'working' || ollamaIsProcessing);
+      const typingBob = (isTyping && Math.floor(frame * 0.25) % 2 === 0) ? 1 : 0;
+
+      // Sombra
+      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      ctx.beginPath();
+      ctx.ellipse(cx + 16, cy + 30, 9, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Casco tecnológico verde de desarrollador
+      px(8, 4 - typingBob, 16, 6, '#15803d');
+      px(6, 7 - typingBob, 20, 3, '#22c55e');
+      // Antena LED con parpadeo de actividad
+      px(15, 0 - typingBob, 2, 4, '#15803d');
+      const ledColor = isTyping ? ((Math.floor(frame * 0.2) % 2 === 0) ? '#4ade80' : '#15803d') : '#22c55e';
+      px(14, 0 - typingBob, 4, 2, ledColor);
+
+      // Cara chibi
+      px(9, 10 - typingBob, 14, 7, '#fcd34d');
+      px(11, 12 - typingBob, 3, 2, '#047857');
+      px(18, 12 - typingBob, 3, 2, '#047857');
+      px(9, 14 - typingBob, 2, 1, '#f87171');
+      px(21, 14 - typingBob, 2, 1, '#f87171');
+
+      // Bata blanca de ingeniero
+      px(9, 17, 14, 9, '#f8fafc');
+      px(13, 17, 6, 8, '#e2e8f0');
+      // Manos tecleando
+      px(7, 18 - typingBob, 3, 6, '#f8fafc');
+      px(22, 18 + typingBob, 3, 6, '#f8fafc');
+
+      // Pantalón
+      px(11, 26, 4, 4, '#0f172a');
+      px(17, 26, 4, 4, '#0f172a');
+
+      if (this.state === 'talking') {
+        drawSpeechBubble(cx + 12, cy - 8, '⚡');
+      } else if (ollamaIsProcessing) {
+        drawSpeechBubble(cx + 12, cy - 8, '⏳');
+      }
+    }
   },
-  {
-    id: 'pulse', name: 'Pulse', role: 'Ingeniero · OpenCode (free)',
-    represents: 'OpenCode · Pulse Alpha Free', model: 'opencode/pulse-alpha-free (Consola OpenCode)', hw: 'Nube OpenCode Console',
-    desc: 'El agente de OpenCode (sí, quien te habla ahora). Grapa diffs, tests y refactors con modelos gratis. Si aprieta el problema, subes de variante en la consola.',
-    spec: { kind: 'robot', head: '#d6c8ff', headDark: '#9d86e8', eyes: '#22d3ee',
-      antenna: '#9d86e8', antennaTip: '#ff5cf4', body: '#8b5cf6', bodyDark: '#5b3cc4',
-      pants: '#38236b', feet: '#241343',
-      emblem(px) { px(7, 9, 2, 4, '#facc15'); px(6, 11, 2, 1, '#facc15'); } },
-    home: { x: 5.7, y: 2.6 }, accent: '#a78bfa',
-    phrases: ['Lanzando opencode run…', 'Tests en verde.', 'Diff ya en tus manos.', 'Razonamiento: high.', 'Esto lo arreglo en 3 pasos.'],
-  },
-  {
-    id: 'gemini', name: 'Gemini', role: 'Diseñador / QA visual · Antigravity',
-    represents: 'Google Antigravity (agy)', model: 'Gemini vía Antigravity IDE/CLI', hw: 'Google · tu máquina',
-    desc: 'El ojo de la oficina: navega la app, hace capturas y verifica que lo que dicen funciona, funciona. Vive en ~/.gemini y aún no tiene ningún MCP conectado.',
-    spec: { kind: 'robot', head: '#eaf2ff', headDark: '#a8c2f0', eyes: '#1a73e8',
-      antenna: '#a8c2f0', antennaTip: '#ffd257', body: '#4285f4', bodyDark: '#2a5bb8',
-      pants: '#1e3a66', feet: '#12233d',
-      emblem(px) { px(7, 9, 2, 1, '#ffd257'); px(6, 10, 4, 1, '#ffd257'); px(7, 11, 2, 1, '#eaf2ff'); } },
-    home: { x: 4.6, y: 7.15 }, accent: '#66a6ff',
-    phrases: ['Verificando en el navegador…', 'Captura 12 de 14.', 'El botón se ve… raro.', 'QA: FAIL → fix.', 'Puliendo el píxel perfecto.'],
-  },
-];
 
-/* ── Layout: zona común ───────────────────────────────────── */
-const DESKS = [
-  { x: 2.9, y: 2.6, accent: '#35d07f' },   // Qwen
-  { x: 5.6, y: 1.7, accent: '#a78bfa' },   // Pulse
-  { x: 4.0, y: 6.3, accent: '#66a6ff' },   // Gemini
-];
-const SERVER = { x: 1.15, y: 1.35 };
-const COFFEE = { x: 6.7, y: 1.1 };
-const RUG = { x: 5.5, y: 5.4, rx: 1.7, ry: 1.0 };
-const PLANTS = [{ x: 0.7, y: 4.6 }, { x: 0.75, y: 8.0 }];
-const FLOOR_LAMP = { x: 1.05, y: 7.2 };
+  gemini: {
+    id: 'gemini',
+    name: 'Antigravity / Gemini',
+    role: 'Orquestador en la Nube',
+    x: 11,
+    y: 5,
+    color: '#0284c7',
+    state: 'working',
+    dialogues: [
+      "¡Antigravity en línea! Supervisando el repositorio y asistiendo a Sergio en tiempo real.",
+      "La integración directa con Ollama vía localhost permite consultar el modelo local sin intermediarios.",
+      "Todo el entorno verificado: limpio, modular y sin dependencias superfluas.",
+      "Listo para continuar desarrollando nuevas capacidades para el centro de control."
+    ],
+    draw(cx, cy, frame) {
+      const px = (x, y, w, h, col) => { ctx.fillStyle = col; ctx.fillRect(cx + x, cy + y, w, h); };
+      const floatOffset = Math.round(Math.sin(frame * 0.08) * 2);
 
-/* ── Layout: cuarto de Sergio (dentro de la misma planta) ─── */
-const S_DESK = { x: 10.35, y: 1.5 };          // caoba
-const S_RUG = { x: 10.25, y: 4.35, rx: 1.5, ry: 0.92 };
-const SOFA = { x: 10.45, y: 4.9 };
-const S_TABLE = { x: 9.35, y: 5.35 };
-const S_LAMP = { x: 11.35, y: 3.15 };
-const S_PLANT = { x: 11.3, y: 8.0 };
-const S_SHELF = { x: 9.62, y: 0.55 };        // librería (frente al sur)
+      // Sombra dinámica
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.beginPath();
+      ctx.ellipse(cx + 16, cy + 30, 8 - floatOffset, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
 
-const OBSTACLES = [
-  { x: S_DESK.x, y: S_DESK.y, r: 0.7 },
-  { x: SOFA.x, y: SOFA.y, r: 0.62 },
-  { x: S_TABLE.x, y: S_TABLE.y, r: 0.32 },
-  { x: S_LAMP.x, y: S_LAMP.y, r: 0.28 },
-  { x: S_SHELF.x, y: S_SHELF.y, r: 0.55 },
-  ...DESKS.map(d => ({ x: d.x, y: d.y, r: 0.55 })),
-  { x: SERVER.x, y: SERVER.y, r: 0.5 },
-  { x: COFFEE.x, y: COFFEE.y, r: 0.55 },
-  { x: FLOOR_LAMP.x, y: FLOOR_LAMP.y, r: 0.3 },
-];
+      // Aura tecnológica
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cx + 6, cy + 2 + floatOffset, 20, 26);
 
-/* ── Suelo y paredes ──────────────────────────────────────── */
-const TILE_A = ['#9a6f47', '#8f6540', '#a87c52'];
-const TILE_B = ['#8d633d', '#835c3a', '#97724a'];
-const TILE_DA = ['#6e4c2e', '#654628', '#755436'];
-const TILE_DB = ['#634628', '#5a3f24', '#6f4c2f'];
+      // Cabello plateado
+      px(8, 3 + floatOffset, 16, 7, '#94a3b8');
+      px(6, 6 + floatOffset, 4, 6, '#64748b');
+      px(22, 6 + floatOffset, 4, 6, '#64748b');
 
-function drawDiamond(cx, cy, hw, hh, fill, stroke) {
+      // Rostro
+      px(10, 8 + floatOffset, 12, 8, '#fde68a');
+      // Visor cyan
+      px(9, 10 + floatOffset, 14, 3, '#0284c7');
+      px(12, 10 + floatOffset, 8, 2, '#38bdf8');
+
+      // Túnica tecnológica
+      px(9, 16 + floatOffset, 14, 10, '#1e3a8a');
+      px(12, 16 + floatOffset, 8, 10, '#3b82f6');
+      px(7, 17 + floatOffset, 3, 7, '#60a5fa');
+      px(22, 17 + floatOffset, 3, 7, '#60a5fa');
+
+      px(11, 26 + floatOffset, 10, 3, '#1d4ed8');
+
+      if (this.state === 'talking') {
+        drawSpeechBubble(cx + 12, cy - 8 + floatOffset, '✨');
+      }
+    }
+  }
+};
+
+function drawSpeechBubble(x, y, symbol) {
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#0f172a';
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(cx, cy - hh); ctx.lineTo(cx + hw, cy); ctx.lineTo(cx, cy + hh); ctx.lineTo(cx - hw, cy);
-  ctx.closePath();
-  ctx.fillStyle = fill; ctx.fill();
-  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
-}
+  ctx.roundRect(x - 6, y - 10, 18, 16, 4);
+  ctx.fill();
+  ctx.stroke();
 
-function drawFloor() {
-  for (let gy = 0; gy < MAP_H; gy++) {
-    for (let gx = 0; gx < MAP_W; gx++) {
-      const p = iso(gx + 0.5, gy + 0.5);
-      const alt = (gx + gy) % 2 === 0;
-      const shade = (gx * 7 + gy * 13) % 3;
-      const inOffice = (gx + 0.5) >= PART_X;
-      const set = inOffice ? (alt ? TILE_DA : TILE_DB) : (alt ? TILE_A : TILE_B);
-      drawDiamond(p.x, p.y, TILE_W / 2, TILE_H / 2, set[shade], 'rgba(25,14,7,.3)');
-    }
-  }
-  ctx.strokeStyle = 'rgba(30,16,8,.3)';
-  ctx.lineWidth = 1;
-  for (let gy = 1; gy < MAP_H; gy++) {
-    const p1 = iso(0, gy), p2 = iso(MAP_W, gy);
-    ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
-  }
-}
-
-function drawWalls() {
-  const A = iso(0, 0), B = iso(0, MAP_H), C = iso(MAP_W, 0);
-  // pared izquierda: cálida
-  const gL = ctx.createLinearGradient(0, A.y - WALL_H, 0, B.y);
-  gL.addColorStop(0, '#d9cdb8'); gL.addColorStop(1, '#b3a68e');
-  ctx.fillStyle = gL;
-  ctx.beginPath(); ctx.moveTo(A.x, A.y - WALL_H); ctx.lineTo(B.x, B.y - WALL_H); ctx.lineTo(B.x, B.y); ctx.lineTo(A.x, A.y); ctx.closePath(); ctx.fill();
-  // pared derecha: más oscura (el cuarto de Sergio)
-  const gR = ctx.createLinearGradient(0, A.y - WALL_H, 0, C.y);
-  gR.addColorStop(0, '#8d8270'); gR.addColorStop(1, '#57503f');
-  ctx.fillStyle = gR;
-  ctx.beginPath(); ctx.moveTo(A.x, A.y - WALL_H); ctx.lineTo(C.x, C.y - WALL_H); ctx.lineTo(C.x, C.y); ctx.lineTo(A.x, A.y); ctx.closePath(); ctx.fill();
-
-  // cornisas
-  ctx.fillStyle = '#ece2cd';
-  ctx.beginPath(); ctx.moveTo(A.x, A.y - WALL_H); ctx.lineTo(B.x, B.y - WALL_H); ctx.lineTo(B.x, B.y - WALL_H + 7); ctx.lineTo(A.x, A.y - WALL_H + 7); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#3f3a2e';
-  ctx.beginPath(); ctx.moveTo(A.x, A.y - WALL_H); ctx.lineTo(C.x, C.y - WALL_H); ctx.lineTo(C.x, C.y - WALL_H + 7); ctx.lineTo(A.x, A.y - WALL_H + 7); ctx.closePath(); ctx.fill();
-  // frisos + filete dorado
-  ctx.fillStyle = '#7d7060';
-  ctx.beginPath(); ctx.moveTo(A.x, A.y - 17); ctx.lineTo(B.x, B.y - 17); ctx.lineTo(B.x, B.y); ctx.lineTo(A.x, A.y); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#4c4432';
-  ctx.beginPath(); ctx.moveTo(A.x, A.y - 17); ctx.lineTo(C.x, C.y - 17); ctx.lineTo(C.x, C.y); ctx.lineTo(A.x, A.y); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(A.x, A.y - 17); ctx.lineTo(B.x, B.y - 17); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(A.x, A.y - 17); ctx.lineTo(C.x, C.y - 17); ctx.stroke();
-
-  /* pared izquierda: pizarra con marco + certificados + estantería */
-  const slopeL = (B.y - A.y) / (B.x - A.x);
-  ctx.save();
-  ctx.translate(A.x + 38, A.y - 90);
-  ctx.transform(1, slopeL, 0, 1, 0, 0);
-  ctx.fillStyle = '#5a3a22'; ctx.fillRect(-6, -6, 162, 68);
-  ctx.fillStyle = '#20242c'; ctx.fillRect(0, 0, 150, 56);
-  ctx.strokeStyle = '#39424f'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(12, 18); ctx.lineTo(66, 18); ctx.moveTo(12, 30); ctx.lineTo(104, 30); ctx.moveTo(12, 42); ctx.lineTo(46, 42); ctx.stroke();
-  ctx.fillStyle = '#e0a43c'; ctx.font = 'bold 8px monospace'; ctx.fillText('Q3 · RELEASE', 12, 11);
-  ctx.fillStyle = '#57f287'; ctx.font = '8px monospace'; ctx.fillText('ship it', 92, 47);
-  ctx.restore();
-  // certificados
-  ctx.save();
-  ctx.translate(A.x + 216, A.y - 80);
-  ctx.transform(1, slopeL, 0, 1, 0, 0);
-  for (const dy of [0, 36]) {
-    ctx.fillStyle = '#c9a227'; ctx.fillRect(0, dy, 26, 20);
-    ctx.fillStyle = '#f5eed6'; ctx.fillRect(2, dy + 2, 22, 16);
-    ctx.fillStyle = '#8a6d1f'; ctx.fillRect(8, dy + 6, 10, 2); ctx.fillRect(8, dy + 11, 10, 2);
-    ctx.fillStyle = '#b03a2e'; ctx.beginPath(); ctx.arc(13, dy + 15, 2.4, 0, Math.PI * 2); ctx.fill();
-  }
-  ctx.restore();
-  // estantería flotante con libros
-  ctx.save();
-  ctx.translate(A.x + 38, A.y - 12);
-  ctx.transform(1, slopeL, 0, 1, 0, 0);
-  ctx.fillStyle = '#6b4a2f'; ctx.fillRect(0, 0, 122, 5);
-  const bookCols = ['#b03a2e', '#2471a3', '#1e8449', '#9a7d0a', '#7d3c98', '#ca6f1e'];
-  for (let i = 0; i < bookCols.length; i++) {
-    ctx.fillStyle = bookCols[i];
-    ctx.fillRect(6 + i * 19, -15, 10, 15);
-  }
-  ctx.restore();
-
-  /* pared derecha: ventanal nocturno con luna (cuarto de Sergio).
-     Empieza antes del tabique para que el tabique tape su borde izquierdo. */
-  const slopeR = (C.y - A.y) / (C.x - A.x);
-  ctx.save();
-  ctx.translate(A.x + 0.60 * (C.x - A.x), A.y - 82);
-  ctx.transform(1, slopeR, 0, 1, 0, 0);
-  ctx.fillStyle = '#241510'; ctx.fillRect(-6, -6, 236, 82);
-  const night = ctx.createLinearGradient(0, 0, 0, 70);
-  night.addColorStop(0, '#0b1030'); night.addColorStop(0.7, '#223050'); night.addColorStop(1, '#3a486e');
-  ctx.fillStyle = night; ctx.fillRect(0, 0, 224, 70);
-  ctx.fillStyle = '#f2ecd9'; ctx.beginPath(); ctx.arc(165, 17, 10, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#d9d2b8'; ctx.beginPath(); ctx.arc(162, 15, 3, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#0d1230';
-  const hs = [20, 32, 14, 40, 24, 28, 12, 36, 18, 26];
-  for (let i = 0; i < hs.length; i++) ctx.fillRect(6 + i * 22, 70 - hs[i], 13, hs[i]);
-  ctx.fillStyle = '#ffd257';
-  for (let i = 0; i < 13; i++) ctx.fillRect(8 + (i * 33) % 210, 28 + ((i * 17) % 34), 2, 2);
-  ctx.strokeStyle = '#241510'; ctx.lineWidth = 4;
-  ctx.beginPath(); ctx.moveTo(112, 0); ctx.lineTo(112, 70); ctx.stroke();
-  ctx.restore();
-}
-
-/* Tabique con puerta: separa el cuarto de Sergio del resto del render.
-   El cuerpo se trocea en tramos para integrarlo en el depth sort de render():
-   profundidad = PART_X + y (la profundidad iso es x + y). */
-const PART_UNIT = Math.hypot(iso(PART_X, 1).x - iso(PART_X, 0).x, iso(PART_X, 1).y - iso(PART_X, 0).y);
-
-function drawPartitionBody(y0, y1) {
-  const p0 = iso(PART_X, y0), p1 = iso(PART_X, y1);
-  const slope = (p1.y - p0.y) / (p1.x - p0.x);
-  const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-  const s0 = y0 * PART_UNIT;  // longitud acumulada desde y=0 (patrón continuo entre tramos)
-  ctx.save();
-  ctx.translate(p0.x, p0.y);
-  ctx.transform(1, slope, 0, 1, 0, 0);
-  // cuerpo de nogal oscuro con paneles
-  const g = ctx.createLinearGradient(0, -WALL_H, 0, 0);
-  g.addColorStop(0, '#54402a'); g.addColorStop(1, '#342415');
-  ctx.fillStyle = g; ctx.fillRect(0, -WALL_H, len, WALL_H);
-  // paneles: moldeuras verticales + paneles rectangulares (alineados al tramo global).
-  // Clip al rectángulo del cuerpo para no pintar sobre la puerta ni el tramo vecino.
-  ctx.save();
+  ctx.fillStyle = '#ffffff';
   ctx.beginPath();
-  ctx.rect(0, -WALL_H, len, WALL_H);
-  ctx.clip();
-  ctx.fillStyle = '#241510';
-  for (let x = 14 - (s0 % 46); x < len - 10; x += 46) {
-    ctx.fillRect(x - 6, -WALL_H + 14, 3, WALL_H - 34);
-    ctx.strokeStyle = '#5e422c'; ctx.lineWidth = 2;
-    ctx.strokeRect(x, -WALL_H + 16, 32, (WALL_H - 44) / 2);
-    ctx.strokeRect(x, -WALL_H + 24 + (WALL_H - 44) / 2, 32, (WALL_H - 44) / 2);
+  ctx.moveTo(x + 1, y + 6);
+  ctx.lineTo(x + 5, y + 6);
+  ctx.lineTo(x + 3, y + 10);
+  ctx.fill();
+
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(symbol, x + 3, y + 2);
+}
+
+// ── Elementos del Entorno (Mobiliario Técnico) ────────────────
+const OBJECTS = [
+  {
+    x: 1, y: 1, w: 3, h: 2,
+    name: 'Biblioteca de Arquitectura',
+    dialogue: "Biblioteca técnica: 'Patrones de Software', 'Clean Code', 'Manual de Python' y 'Documentación de Ollama'.",
+    draw(cx, cy) { drawBookshelf(cx, cy, 3 * TILE, 2 * TILE); }
+  },
+  {
+    x: 5, y: 1, w: 4, h: 2,
+    name: 'Pizarra de Arquitectura',
+    dialogue: "Diagrama del sistema: [Sergio / UI] ➔ [Ollama Local: qwen2.5-coder] + [Antigravity Cloud].",
+    draw(cx, cy) { drawWhiteboard(cx, cy, 4 * TILE, 2 * TILE); }
+  },
+  {
+    x: 10, y: 1, w: 3, h: 2,
+    name: 'Servidor Local Ollama',
+    dialogue: "Servidor local en http://localhost:11434. Estado activo y listo para procesar prompts en RAM.",
+    draw(cx, cy) { drawServers(cx, cy, 3 * TILE, 2 * TILE); }
+  },
+  {
+    x: 14, y: 1, w: 1, h: 2,
+    name: 'Cafetera Espresso',
+    dialogue: "Cafetera del equipo. Sergio ya recargó su taza con espresso caliente.",
+    draw(cx, cy) { drawCoffeeMachine(cx, cy, 1 * TILE, 2 * TILE); }
+  },
+  {
+    x: 3, y: 4, w: 3, h: 2,
+    name: 'Puesto de Qwen Local',
+    dialogue: "Estación de cómputo offline. Monitor CRT conectado al motor Ollama local.",
+    draw(cx, cy) { drawWorkstation(cx, cy, PAL.monitorScreenGreen, 'QWEN'); }
+  },
+  {
+    x: 10, y: 4, w: 3, h: 2,
+    name: 'Puesto de Gemini / Antigravity',
+    dialogue: "Terminal de enlace en la nube con Google Antigravity para soporte de arquitectura y código.",
+    draw(cx, cy) { drawWorkstation(cx, cy, PAL.monitorScreenBlue, 'GEMINI'); }
+  },
+  {
+    x: 19, y: 4, w: 4, h: 2,
+    name: 'Despacho de Sergio',
+    dialogue: "Escritorio ejecutivo de caoba con laptop, monitor secundario y taza de café.",
+    draw(cx, cy) { drawExecutiveDesk(cx, cy); }
+  },
+  {
+    x: 18, y: 9, w: 3, h: 2,
+    name: 'Sofá Ejecutivo',
+    dialogue: "Sofá Chesterfield de cuero marrón para planificar sprints y descansar la vista.",
+    draw(cx, cy) { drawSofa(cx, cy); }
+  },
+  {
+    x: 6, y: 8, w: 4, h: 4,
+    name: 'Alfombra Circuito PCB',
+    dialogue: "Alfombra central con el nodo principal de cómputo del laboratorio.",
+    draw(cx, cy) { drawCircuitRug(cx, cy, 4 * TILE, 4 * TILE); }
+  },
+  {
+    x: 0, y: 13, w: 1, h: 2,
+    name: 'Planta de Oficina',
+    dialogue: "Monstera deliciosa en maceta de terracota.",
+    draw(cx, cy) { drawPlant(cx, cy); }
+  },
+  {
+    x: 23, y: 13, w: 1, h: 2,
+    name: 'Bonsái Ejecutivo',
+    dialogue: "Bonsái decorativo en el despacho de Sergio.",
+    draw(cx, cy) { drawPlant(cx, cy); }
   }
-  ctx.restore();
-  // línea de oro (rail) y coronilla
-  ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(0, -44); ctx.lineTo(len, -44); ctx.stroke();
-  ctx.fillStyle = '#17100a'; ctx.fillRect(0, -WALL_H, len, 6);
-  // zócalo
-  ctx.fillStyle = '#17100a'; ctx.fillRect(0, -8, len, 8);
-  ctx.restore();
-}
-
-/* Trocea [0,DOOR_Y0] y [DOOR_Y1,MAP_H] en tramos de <= TRAMO_LEN.
-   Pegado a cada borde de la puerta queda un tramo pequeño para que el
-   depth del cuerpo vecino quede por debajo del de los postes y estos
-   se dibujen completos encima. */
-const TRAMO_LEN = 0.5;
-const DOOR_TAB = 0.08;
-function partTramos() {
-  const tramos = [];
-  const add = (a, b) => {
-    let y = a;
-    while (y < b - 0.001) {
-      const y1 = Math.min(b, y + TRAMO_LEN);
-      tramos.push({ y0: y, y1 });
-      y = y1;
-    }
-  };
-  add(0, DOOR_Y0 - DOOR_TAB);
-  tramos.push({ y0: DOOR_Y0 - DOOR_TAB, y1: DOOR_Y0 });
-  tramos.push({ y0: DOOR_Y1, y1: DOOR_Y1 + DOOR_TAB });
-  add(DOOR_Y1 + DOOR_TAB, MAP_H);
-  return tramos;
-}
-
-/* Poste de la puerta (arista de latón) */
-function drawPartitionPost(gy) {
-  const p = iso(PART_X, gy);
-  ctx.fillStyle = '#1c110a';
-  ctx.fillRect(p.x - 5, p.y - WALL_H, 10, WALL_H);
-  ctx.fillStyle = '#c9a227';
-  ctx.fillRect(p.x - 5, p.y - WALL_H, 10, 4);
-  ctx.fillRect(p.x - 6, p.y - 4, 12, 3);
-}
-
-/* Dintel + placa de latón SERGIO (pasa por delante del que cruza la puerta) */
-function drawPartitionLintel() {
-  const d0 = iso(PART_X, DOOR_Y0), d1 = iso(PART_X, DOOR_Y1);
-  const slope = (d1.y - d0.y) / (d1.x - d0.x);
-  const len = Math.hypot(d1.x - d0.x, d1.y - d0.y);
-  ctx.save();
-  ctx.translate(d0.x, d0.y);
-  ctx.transform(1, slope, 0, 1, 0, 0);
-  ctx.fillStyle = '#33200f'; ctx.fillRect(-5, -WALL_H, len + 10, 22);
-  ctx.fillStyle = '#c9a227'; ctx.fillRect(-5, -WALL_H + 22, len + 10, 3);
-  // placa de latón SERGIO centrada en el dintel
-  const pw = 56;
-  ctx.fillStyle = '#c9a227'; ctx.fillRect(len / 2 - pw / 2, -WALL_H + 3, pw, 15);
-  ctx.fillStyle = '#241510'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('S E R G I O', len / 2, -WALL_H + 14.5);
-  ctx.textAlign = 'left';
-  ctx.restore();
-}
-
-/* Tramos del tabique precalculados una vez (profundidad = x + y); los closures capturan y0/y1 estables */
-const partitionDraws = [
-  ...partTramos().map(s => ({ depth: PART_X + (s.y0 + s.y1) / 2, draw: () => drawPartitionBody(s.y0, s.y1) })),
-  { depth: PART_X + DOOR_Y0, draw: () => drawPartitionPost(DOOR_Y0) },
-  { depth: PART_X + DOOR_Y1 + 0.05, draw: () => { drawPartitionPost(DOOR_Y1); drawPartitionLintel(); } },
 ];
 
-/* ── Mobiliario ───────────────────────────────────────────── */
-function drawDesk(d, t) {
-  const p = iso(d.x, d.y);
-  ctx.fillStyle = 'rgba(0,0,0,.30)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 4, 50, 15, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#241d33';
-  ctx.beginPath(); ctx.ellipse(p.x + 26, p.y + 10, 11, 6.5, 0, 0, Math.PI * 2); ctx.fill();
-  const top = { x: p.x, y: p.y - 24 };
-  ctx.fillStyle = '#4a2c1c';
-  ctx.beginPath(); ctx.moveTo(top.x - 46, top.y); ctx.lineTo(top.x, top.y + 18); ctx.lineTo(top.x, p.y); ctx.lineTo(top.x - 46, p.y - 18); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#5d3a24';
-  ctx.beginPath(); ctx.moveTo(top.x + 46, top.y); ctx.lineTo(top.x, top.y + 18); ctx.lineTo(top.x, p.y); ctx.lineTo(top.x + 46, p.y - 18); ctx.closePath(); ctx.fill();
-  drawDiamond(top.x, top.y, 46, 18, '#7a4f2c', 'rgba(20,10,5,.4)');
-  ctx.fillStyle = '#10131d'; ctx.fillRect(top.x - 13, top.y - 24, 26, 18);
-  ctx.fillStyle = d.accent; ctx.globalAlpha = .3; ctx.fillRect(top.x - 11, top.y - 22, 22, 14); ctx.globalAlpha = 1;
-  const blink = (Math.floor(t / 530 + d.x * 7) % 2) === 0;
-  if (blink) { ctx.fillStyle = d.accent; ctx.fillRect(top.x - 9, top.y - 12, 4, 2); }
-  ctx.fillStyle = '#10131d'; ctx.fillRect(top.x - 2, top.y - 6, 4, 4);
-  drawDiamond(top.x, top.y + 8, 12, 5, '#232838');
-  ctx.fillStyle = d.accent; ctx.fillRect(top.x + 22, top.y - 6, 5, 6);
-}
+// ── Rutinas de Dibujo ─────────────────────────────────────────
+function drawBookshelf(cx, cy, w, h) {
+  ctx.fillStyle = '#451a03';
+  ctx.fillRect(cx, cy, w, h);
+  ctx.fillStyle = '#78350f';
+  ctx.fillRect(cx + 2, cy + 2, w - 4, h - 4);
 
-function drawSergioDesk(t) {
-  const p = iso(S_DESK.x, S_DESK.y);
-  ctx.fillStyle = 'rgba(0,0,0,.35)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 6, 84, 22, 0, 0, Math.PI * 2); ctx.fill();
-  // silla ejecutiva de espaldas
-  ctx.fillStyle = '#33231e'; ctx.fillRect(p.x - 16, p.y - 70, 32, 44);
-  ctx.fillStyle = '#402d26'; ctx.fillRect(p.x - 13, p.y - 67, 26, 38);
-  ctx.fillStyle = '#c9a227';
-  for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(p.x - 9, p.y - 60 + i * 11, 1.4, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(p.x + 9, p.y - 60 + i * 11, 1.4, 0, Math.PI * 2); ctx.fill(); }
-  const top = { x: p.x, y: p.y - 28 };
-  ctx.fillStyle = '#2c1608';
-  ctx.beginPath(); ctx.moveTo(top.x - 70, top.y); ctx.lineTo(top.x, top.y + 24); ctx.lineTo(top.x, p.y + 5); ctx.lineTo(top.x - 70, p.y - 19); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#3a2010';
-  ctx.beginPath(); ctx.moveTo(top.x + 70, top.y); ctx.lineTo(top.x, top.y + 24); ctx.lineTo(top.x, p.y + 5); ctx.lineTo(top.x + 70, p.y - 19); ctx.closePath(); ctx.fill();
-  drawDiamond(top.x, top.y, 70, 24, '#452a17', '#1a0d04');
-  drawDiamond(top.x, top.y, 63, 20.5, '#53331d');
-  // lámpara de banquero esmeralda + latón
-  ctx.fillStyle = '#c9a227'; ctx.fillRect(top.x - 34, top.y - 7, 12, 4);
-  ctx.fillStyle = '#0f5a52';
-  ctx.beginPath(); ctx.moveTo(top.x - 39, top.y - 7); ctx.lineTo(top.x - 17, top.y - 7); ctx.lineTo(top.x - 20, top.y - 17); ctx.lineTo(top.x - 36, top.y - 17); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 1.2; ctx.stroke();
-  // intercomunicador ámbar con estado del equipo
-  ctx.fillStyle = '#0a0c14'; ctx.fillRect(top.x - 2, top.y - 16, 28, 13);
-  ctx.fillStyle = '#ffb64f'; ctx.font = 'bold 6px monospace';
-  const dots = '.'.repeat(1 + Math.floor(t / 400) % 3);
-  ctx.fillText('EQUIPO: OK' + dots, top.x + 1, top.y - 7.5);
-  // dosierers + placa
-  ctx.fillStyle = '#e8e2d0'; ctx.fillRect(top.x + 32, top.y - 3, 16, 4);
-  ctx.fillStyle = '#c9a227'; ctx.fillRect(top.x + 32, top.y - 5.5, 16, 2);
-  ctx.fillStyle = '#c9a227'; ctx.fillRect(top.x - 12, top.y + 7, 24, 7);
-  ctx.fillStyle = '#241510'; ctx.font = 'bold 6px monospace'; ctx.fillText('S E R G I O', top.x - 10, top.y + 12.4);
-}
-
-function drawShelf(t) {
-  const p = iso(S_SHELF.x, S_SHELF.y);
-  ctx.fillStyle = 'rgba(0,0,0,.3)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 3, 40, 12, 0, 0, Math.PI * 2); ctx.fill();
-  const h = 78, w = 40;
-  ctx.fillStyle = '#33200f'; ctx.fillRect(p.x - w, p.y - h, w * 2, h);
-  ctx.fillStyle = '#241510'; ctx.fillRect(p.x - w + 5, p.y - h + 5, w * 2 - 10, h - 10);
-  const cols = ['#b03a2e', '#2471a3', '#1e8449', '#9a7d0a', '#7d3c98', '#ca6f1e', '#566573'];
+  const bookColors = ['#0284c7', '#16a34a', '#d97706', '#9333ea', '#ef4444', '#38bdf8'];
   for (let shelf = 0; shelf < 3; shelf++) {
-    const sy = p.y - h + 10 + shelf * 23;
-    ctx.fillStyle = '#33200f'; ctx.fillRect(p.x - w + 5, sy + 15, w * 2 - 10, 3);
-    let bx = p.x - w + 9, k = shelf * 4;
-    while (bx < p.x + w - 9) {
-      const bw = 6 + ((k * 37 + 5) % 5), bh = 10 + ((k * 53 + 3) % 5);
-      ctx.fillStyle = cols[k % cols.length];
-      ctx.fillRect(bx, sy + 15 - bh, bw, bh);
-      bx += bw + 2; k++;
+    const sy = cy + 6 + shelf * 18;
+    ctx.fillStyle = '#271003';
+    ctx.fillRect(cx + 4, sy + 14, w - 8, 3);
+
+    let bx = cx + 6;
+    while (bx < cx + w - 10) {
+      const bw = 5 + (bx % 4);
+      const col = bookColors[(bx + shelf) % bookColors.length];
+      ctx.fillStyle = col;
+      ctx.fillRect(bx, sy, bw, 14);
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.fillRect(bx + 1, sy + 2, bw - 2, 2);
+      bx += bw + 1;
     }
   }
-  // marco de foto + plantita encima
-  ctx.fillStyle = '#c9a227'; ctx.fillRect(p.x - 12, p.y - h - 12, 14, 11);
-  ctx.fillStyle = '#0a0c14'; ctx.fillRect(p.x - 10, p.y - h - 10, 10, 7);
-  ctx.fillStyle = '#247a4e'; ctx.beginPath(); ctx.ellipse(p.x + 16, p.y - h - 6, 7, 5, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#5a3a22'; ctx.fillRect(p.x + 12, p.y - h - 3, 8, 4);
 }
 
-function drawSofa() {
-  const p = iso(SOFA.x, SOFA.y);
-  ctx.fillStyle = 'rgba(0,0,0,.32)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 5, 50, 14, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#4e342c';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y - 6, 44, 16, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#6a463a';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y - 13, 44, 14, 0, Math.PI, 0); ctx.fill();
-  ctx.fillStyle = '#3a2620';
-  for (const dx of [-24, 0, 24]) {
-    ctx.beginPath(); ctx.ellipse(p.x + dx, p.y - 9, 11.5, 5.5, 0, 0, Math.PI * 2); ctx.fill();
-  }
-  ctx.fillStyle = '#c9a227';
-  for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.arc(p.x + i * 17, p.y - 17, 1.2, 0, Math.PI * 2); ctx.fill(); }
+function drawWhiteboard(cx, cy, w, h) {
+  ctx.fillStyle = '#64748b';
+  ctx.fillRect(cx, cy, w, h);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(cx + 4, cy + 4, w - 8, h - 8);
+
+  ctx.fillStyle = '#0284c7';
+  ctx.fillRect(cx + 12, cy + 12, 26, 16);
+  ctx.fillStyle = '#16a34a';
+  ctx.fillRect(cx + 52, cy + 12, 28, 16);
+  ctx.fillStyle = '#8b5cf6';
+  ctx.fillRect(cx + 92, cy + 12, 26, 16);
+
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(cx + 38, cy + 20); ctx.lineTo(cx + 52, cy + 20);
+  ctx.moveTo(cx + 80, cy + 20); ctx.lineTo(cx + 92, cy + 20);
+  ctx.moveTo(cx + 66, cy + 28); ctx.lineTo(cx + 66, cy + 40);
+  ctx.stroke();
+
+  ctx.fillStyle = '#475569';
+  ctx.font = '8px monospace';
+  ctx.fillText('IA LOCAL PIPELINE', cx + 22, cy + 46);
 }
 
-function drawCoffeeTable() {
-  const p = iso(S_TABLE.x, S_TABLE.y);
-  ctx.fillStyle = 'rgba(0,0,0,.28)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 3, 20, 7, 0, 0, Math.PI * 2); ctx.fill();
-  drawDiamond(p.x, p.y - 6, 19, 7.5, '#1c2530', '#c9a227');
-  ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(p.x - 11, p.y - 2); ctx.lineTo(p.x - 11, p.y + 7); ctx.moveTo(p.x + 11, p.y - 2); ctx.lineTo(p.x + 11, p.y + 7); ctx.stroke();
-  ctx.fillStyle = '#e8e2d0'; ctx.fillRect(p.x - 5, p.y - 9, 10, 3);
-}
+function drawServers(cx, cy, w, h) {
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(cx, cy, w, h);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(cx + 2, cy + 2, w - 4, h - 4);
 
-function drawOfficeRug() {
-  const r = iso(S_RUG.x, S_RUG.y);
-  drawDiamond(r.x, r.y, S_RUG.rx * TILE_W / 1.6, S_RUG.ry * TILE_H / 1.6, '#5b2333', '#c9a227');
-  drawDiamond(r.x, r.y, S_RUG.rx * TILE_W / 2.05, S_RUG.ry * TILE_H / 2.05, '#6e2c40');
-  drawDiamond(r.x, r.y, S_RUG.rx * TILE_W / 3.3, S_RUG.ry * TILE_H / 3.3, '#5b2333', '#c9a227');
-}
+  for (let r = 0; r < 4; r++) {
+    const ry = cy + 4 + r * 14;
+    ctx.fillStyle = '#020617';
+    ctx.fillRect(cx + 6, ry, w - 12, 11);
 
-function drawOfficeLamp() {
-  const p = iso(S_LAMP.x, S_LAMP.y);
-  ctx.fillStyle = 'rgba(0,0,0,.3)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 3, 13, 6, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 2.5;
-  ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y - 66); ctx.stroke();
-  ctx.fillStyle = '#f5dfa8';
-  ctx.beginPath(); ctx.moveTo(p.x - 14, p.y - 66); ctx.lineTo(p.x + 14, p.y - 66); ctx.lineTo(p.x + 9, p.y - 84); ctx.lineTo(p.x - 9, p.y - 84); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#241510'; ctx.beginPath(); ctx.ellipse(p.x, p.y, 8, 3.5, 0, 0, Math.PI * 2); ctx.fill();
-}
+    const isBlinking = (Math.floor(globalTick * 0.15 + r) % 3 === 0);
+    ctx.fillStyle = ollamaOnline ? (isBlinking ? '#22c55e' : '#15803d') : '#ef4444';
+    ctx.fillRect(cx + 10, ry + 4, 4, 3);
+    ctx.fillStyle = (r % 2 === 0) ? '#38bdf8' : '#eab308';
+    ctx.fillRect(cx + 16, ry + 4, 3, 3);
 
-function drawServer(t) {
-  const p = iso(SERVER.x, SERVER.y);
-  ctx.fillStyle = 'rgba(0,0,0,.32)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 4, 30, 11, 0, 0, Math.PI * 2); ctx.fill();
-  const h = 64;
-  ctx.fillStyle = '#12151f'; ctx.fillRect(p.x - 17, p.y - h, 34, h);
-  ctx.fillStyle = '#1d2230'; ctx.fillRect(p.x - 17, p.y - h, 7, h);
-  ctx.fillStyle = '#c9a227'; ctx.fillRect(p.x - 17, p.y - h, 34, 2);
-  for (let i = 0; i < 4; i++) {
-    const y = p.y - h + 12 + i * 13;
-    ctx.fillStyle = '#0a0c14'; ctx.fillRect(p.x - 12, y, 24, 9);
-    const on = (Math.floor(t / (280 + i * 170) + i * 2) % 3) !== 0;
-    ctx.fillStyle = on ? '#57f287' : '#173421';
-    ctx.fillRect(p.x + 6, y + 3, 3, 3);
-    ctx.fillStyle = '#233047'; ctx.fillRect(p.x - 9, y + 3, 8, 3);
-  }
-  ctx.fillStyle = '#57f287'; ctx.font = 'bold 7px monospace';
-  ctx.fillText('OLLAMA', p.x - 15, p.y - h - 4);
-}
-
-function drawCoffee(t, inUse) {
-  const p = iso(COFFEE.x, COFFEE.y);
-  ctx.fillStyle = 'rgba(0,0,0,.28)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 4, 30, 11, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#3a2417'; ctx.fillRect(p.x - 21, p.y - 16, 42, 16);
-  ctx.fillStyle = '#5d3a24'; ctx.fillRect(p.x - 21, p.y - 16, 42, 3);
-  ctx.fillStyle = '#232838'; ctx.fillRect(p.x - 10, p.y - 34, 20, 18);
-  ctx.fillStyle = '#b03a2e'; ctx.fillRect(p.x - 10, p.y - 30, 20, 3);
-  ctx.fillStyle = '#0a0c14'; ctx.fillRect(p.x - 5, p.y - 22, 10, 6);
-  ctx.fillStyle = '#c08457'; ctx.fillRect(p.x - 5, p.y - 17, 10, 2);
-  if (inUse) {
-    for (let i = 0; i < 3; i++) {
-      const ph = (t / 350 + i * 1.7) % 3;
-      ctx.globalAlpha = clamp(1 - ph / 3, 0, 1);
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(p.x - 6 + i * 6, p.y - 36 - ph * 8, 2, 2);
+    ctx.fillStyle = '#334155';
+    for (let g = 0; g < 6; g++) {
+      ctx.fillRect(cx + 26 + g * 8, ry + 3, 5, 5);
     }
-    ctx.globalAlpha = 1;
   }
 }
 
-function drawPlant(pl, big) {
-  const p = iso(pl.x, pl.y);
-  const s = big ? 1.35 : 1;
-  ctx.fillStyle = 'rgba(0,0,0,.25)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 3, 13 * s, 5.5 * s, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#5a3a22'; ctx.fillRect(p.x - 7 * s, p.y - 9 * s, 14 * s, 10 * s);
-  ctx.fillStyle = '#247a4e';
-  ctx.beginPath(); ctx.ellipse(p.x - 5 * s, p.y - 14 * s, 7 * s, 5 * s, -0.5, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.ellipse(p.x + 6 * s, p.y - 17 * s, 7 * s, 5 * s, 0.5, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.ellipse(p.x, p.y - 21 * s, 6 * s, 7.5 * s, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#2fbf71';
-  ctx.beginPath(); ctx.ellipse(p.x - 3 * s, p.y - 18 * s, 2.4 * s, 1.6 * s, 0, 0, Math.PI * 2); ctx.fill();
+function drawCoffeeMachine(cx, cy, w, h) {
+  ctx.fillStyle = '#475569';
+  ctx.fillRect(cx, cy + 24, w, h - 24);
+
+  ctx.fillStyle = '#0284c7';
+  ctx.fillRect(cx + 4, cy + 4, w - 8, 20);
+  ctx.fillStyle = '#0369a1';
+  ctx.fillRect(cx + 6, cy + 8, w - 12, 6);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(cx + 12, cy + 16, 8, 7);
+
+  const vaporY = (globalTick * 0.5) % 8;
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillRect(cx + 14 + Math.sin(globalTick * 0.1) * 2, cy + 12 - vaporY, 3, 3);
 }
 
-function drawFloorLamp() {
-  const p = iso(FLOOR_LAMP.x, FLOOR_LAMP.y);
-  ctx.fillStyle = 'rgba(0,0,0,.28)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 3, 14, 6, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 2.5;
-  ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y - 56); ctx.stroke();
-  ctx.fillStyle = '#f0d49a';
-  ctx.beginPath(); ctx.moveTo(p.x - 12, p.y - 56); ctx.lineTo(p.x + 12, p.y - 56); ctx.lineTo(p.x + 8, p.y - 71); ctx.lineTo(p.x - 8, p.y - 71); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#241510'; ctx.beginPath(); ctx.ellipse(p.x, p.y, 8, 3.5, 0, 0, Math.PI * 2); ctx.fill();
-}
+function drawWorkstation(cx, cy, screenColor, label) {
+  ctx.fillStyle = PAL.deskBody;
+  ctx.fillRect(cx, cy + 20, 3 * TILE, 36);
+  ctx.fillStyle = PAL.deskTop;
+  ctx.fillRect(cx - 2, cy + 16, 3 * TILE + 4, 10);
 
-function drawRug() {
-  const r = iso(RUG.x, RUG.y);
-  drawDiamond(r.x, r.y, RUG.rx * TILE_W / 1.6, RUG.ry * TILE_H / 1.6, '#1f4e4a', '#c9a227');
-  drawDiamond(r.x, r.y, RUG.rx * TILE_W / 2.1, RUG.ry * TILE_H / 2.1, '#27635e');
-  drawDiamond(r.x, r.y, RUG.rx * TILE_W / 3.4, RUG.ry * TILE_H / 3.4, '#1f4e4a');
-}
+  ctx.fillStyle = PAL.monitorCase;
+  ctx.fillRect(cx + 26, cy, 44, 30);
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(cx + 30, cy + 4, 36, 22);
 
-/* ── Personajes ───────────────────────────────────────────── */
-const STATUS = { work: 'Tecleando', move: 'Caminando', coffee: 'En la cafetera', think: 'Pensando' };
+  // Monitor activo
+  ctx.fillStyle = screenColor;
+  ctx.fillRect(cx + 32, cy + 6, 32, 18);
 
-function makeWalker(spec) {
-  const sprites = [makeSprite(spec.spec, 0), makeSprite(spec.spec, 1)];
-  return {
-    spec, sprites,
-    x: spec.home.x, y: spec.home.y, tx: spec.home.x, ty: spec.home.y,
-    state: 'work', timer: rand(2, 5),
-    bubble: null, bubbleUntil: 0, nextPhrase: rand(2500, 8000),
-    waveUntil: 0, facing: 1, phase: Math.random() * Math.PI * 2, onArrive: 'work',
-  };
-}
-const npcs = CAST.map(makeWalker);
-
-function pickTarget() {
-  for (let i = 0; i < 26; i++) {
-    const tx = rand(1.2, MAP_W - 1.1), ty = rand(1.1, MAP_H - 1.1);
-    if (!OBSTACLES.some(o => Math.hypot(o.x - tx, o.y - ty) < o.r + 0.25)) return { tx, ty };
+  // Código en pantalla
+  ctx.fillStyle = '#ffffff';
+  for (let l = 0; l < 3; l++) {
+    const lw = 10 + ((l * 8 + globalTick) % 18);
+    ctx.fillRect(cx + 34, cy + 8 + l * 5, lw, 2);
   }
-  return { tx: RUG.x, ty: RUG.y };
-}
-function decideNext(n) {
-  const r = Math.random();
-  if (r < 0.34) { n.tx = n.spec.home.x; n.ty = n.spec.home.y; n.onArrive = 'work'; }
-  else if (r < 0.5) { n.tx = COFFEE.x + rand(-0.4, 0.4); n.ty = COFFEE.y + 0.7; n.onArrive = 'coffee'; }
-  else if (r < 0.62) { n.tx = RUG.x + rand(-0.7, 0.7); n.ty = RUG.y + rand(-0.45, 0.45); n.onArrive = 'think'; }
-  else { const p = pickTarget(); n.tx = p.tx; n.ty = p.ty; n.onArrive = 'think'; }
-  n.state = 'move';
-  n.timer = rand(6, 12);
+
+  ctx.fillStyle = '#cbd5e1';
+  ctx.fillRect(cx + 34, cy + 22, 28, 5);
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillRect(cx + 66, cy + 23, 4, 4);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = 'bold 9px monospace';
+  ctx.fillText(label, cx + 32, cy + 42);
 }
 
-function phraseOf(n) {
-  if (n.spec.id === 'sergio' && n.x >= PART_X && n.spec.cornerPhrases) {
-    return n.spec.cornerPhrases[Math.floor(Math.random() * n.spec.cornerPhrases.length)];
-  }
-  return n.spec.phrases[Math.floor(Math.random() * n.spec.phrases.length)];
+function drawExecutiveDesk(cx, cy) {
+  const w = 4 * TILE;
+  ctx.fillStyle = PAL.deskWood;
+  ctx.fillRect(cx, cy + 16, w, 44);
+  ctx.fillStyle = PAL.deskWoodTop;
+  ctx.fillRect(cx - 4, cy + 10, w + 8, 12);
+
+  ctx.fillStyle = PAL.carpetBorder;
+  ctx.fillRect(cx, cy + 22, w, 3);
+
+  // Laptop executive
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(cx + 40, cy - 2, 48, 24);
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillRect(cx + 42, cy, 44, 20);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(cx + 60, cy + 6, 8, 8);
+
+  ctx.fillStyle = '#475569';
+  ctx.fillRect(cx + 36, cy + 14, 56, 4);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(cx + 20, cy + 12, 8, 8);
+  ctx.fillStyle = '#b45309';
+  ctx.fillRect(cx + 22, cy + 14, 4, 4);
+
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(cx + 104, cy + 12, 12, 8);
 }
 
-function updateNPC(n, dt, t) {
-  if (t < n.waveUntil) return;
-  if (n.state === 'move') {
-    const dx = n.tx - n.x, dy = n.ty - n.y, dist = Math.hypot(dx, dy);
-    if (dist < 0.06) { n.state = n.onArrive || 'think'; n.timer = rand(3, 7); return; }
-    const step = Math.min(dist, SPEED * dt);
-    let nx = n.x + (dx / dist) * step;
-    let ny = n.y + (dy / dist) * step;
-    // El tabique solo se cruza por la puerta: si el paso cruza PART_X fuera de
-    // la franja, bloqueamos x y deslizamos en y hacia el centro de la puerta.
-    const doorC = (DOOR_Y0 + DOOR_Y1) / 2;
-    const cruza = (n.x < PART_X) !== (nx < PART_X);
-    const enFranja = ny >= DOOR_Y0 && ny <= DOOR_Y1;
-    if (cruza && !enFranja) {
-      // deslice monótono hacia el centro: no oscila y acaba entrando en la puerta
-      ny = n.y + clamp(doorC - n.y, -step, step);
-      nx = n.x;
-    }
-    n.x = nx; n.y = ny;
-    n.facing = (dx - dy) >= 0 ? 1 : -1;
-  } else {
-    n.timer -= dt;
-    if (n.timer <= 0) decideNext(n);
-  }
-  if (t > n.nextPhrase) {
-    n.bubble = phraseOf(n);
-    n.bubbleUntil = t + 3600;
-    n.nextPhrase = t + rand(9000, 17000);
+function drawSofa(cx, cy) {
+  ctx.fillStyle = '#451a03';
+  ctx.fillRect(cx, cy, 3 * TILE, 36);
+  ctx.fillStyle = '#78350f';
+  ctx.fillRect(cx + 4, cy + 4, 3 * TILE - 8, 24);
+  for (let c = 0; c < 3; c++) {
+    ctx.strokeStyle = '#271003';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx + 6 + c * 28, cy + 8, 26, 18);
   }
 }
 
-function drawNPC(n, t) {
-  const p = iso(n.x, n.y);
-  ctx.fillStyle = 'rgba(0,0,0,.32)';
-  ctx.beginPath(); ctx.ellipse(p.x, p.y + 3, 17, 7, 0, 0, Math.PI * 2); ctx.fill();
-  if (selected === n) {
-    const pulse = 1 + 0.18 * Math.sin(t / 180);
-    ctx.strokeStyle = '#e0a43c'; ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.ellipse(p.x, p.y + 3, 22 * pulse, 9 * pulse, 0, 0, Math.PI * 2); ctx.stroke();
-  }
-  const walking = n.state === 'move';
-  const bob = walking ? Math.abs(Math.sin(t / 105 + n.phase)) * 3 : Math.sin(t / 620 + n.phase) * 1.5;
-  const frame = walking ? (Math.floor(t / 190 + n.phase) % 2) : 0;
-  const wave = t < n.waveUntil ? Math.sin(t / 90) * 4 : 0;
+// Alfombra de circuito tecnológico (reemplaza la de Pokémon)
+function drawCircuitRug(cx, cy, w, h) {
+  const rx = cx + w / 2;
+  const ry = cy + h / 2;
+  const r = w / 2 - 4;
+
   ctx.save();
-  ctx.translate(p.x, p.y - bob);
-  if (n.facing < 0) ctx.scale(-1, 1);
-  ctx.drawImage(n.sprites[frame], -24, -60 + wave * 0.4);
-  ctx.restore();
+  ctx.beginPath();
+  ctx.arc(rx, ry, r, 0, Math.PI * 2);
+  ctx.fillStyle = '#0f172a';
+  ctx.fill();
 
-  if (n.state === 'think') {
-    ctx.fillStyle = 'rgba(255,255,255,.85)';
-    for (let i = 0; i < 3; i++) {
-      const ph = (t / 280 + i * 0.9) % 3;
-      ctx.globalAlpha = clamp(1 - ph / 3, 0.15, 1);
-      ctx.beginPath(); ctx.arc(p.x + 12 + i * 8, p.y - 66 - ph * 6, 2.2, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  }
-  if (n.bubble && t < n.bubbleUntil) {
-    ctx.font = 'bold 11px "Courier New", monospace';
-    const w = ctx.measureText(n.bubble).width + 16;
-    const bx = clamp(p.x, w / 2 + 4, canvas.width - w / 2 - 4);
-    const by = p.y - 78;
-    ctx.fillStyle = 'rgba(255,255,255,.95)';
-    ctx.strokeStyle = '#14101f'; ctx.lineWidth = 2;
-    roundRect(bx - w / 2, by - 14, w, 19, 6); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(p.x - 4, by + 4); ctx.lineTo(p.x + 5, by + 4); ctx.lineTo(p.x, by + 12); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#14101f'; ctx.textAlign = 'center';
-    ctx.fillText(n.bubble, bx, by);
-    ctx.textAlign = 'left';
-  }
-  ctx.font = 'bold 10px "Segoe UI", sans-serif';
-  const nw = ctx.measureText(n.spec.name).width + 10;
-  const lx = clamp(p.x, nw / 2 + 3, canvas.width - nw / 2 - 3);
-  ctx.fillStyle = 'rgba(10,8,16,.78)';
-  roundRect(lx - nw / 2, p.y + 6, nw, 13, 4); ctx.fill();
-  ctx.fillStyle = n.spec.accent; ctx.textAlign = 'center';
-  ctx.fillText(n.spec.name.toUpperCase(), lx, p.y + 16);
-  ctx.textAlign = 'left';
-}
+  // Borde exterior cyan
+  ctx.strokeStyle = '#0284c7';
+  ctx.lineWidth = 3;
+  ctx.stroke();
 
-/* ── Iluminación ──────────────────────────────────────────── */
-function radial(x, y, r, color) {
-  const g = ctx.createRadialGradient(x, y, 4, x, y, r);
-  g.addColorStop(0, color); g.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(x - r, y - r, r * 2, r * 2);
-}
-function drawLighting() {
-  const sLamp = iso(FLOOR_LAMP.x, FLOOR_LAMP.y);
-  const officeLamp = iso(S_LAMP.x, S_LAMP.y);
-  const officeDesk = iso(S_DESK.x, S_DESK.y);
-  const A = iso(0, 0), B = iso(0, MAP_H), C = iso(MAP_W, 0);
-  ctx.save();
-  radial(sLamp.x, sLamp.y - 70, 140, 'rgba(255,214,140,.32)');
-  radial(officeLamp.x, officeLamp.y - 82, 160, 'rgba(255,222,150,.38)');
-  radial(officeDesk.x - 24, officeDesk.y - 46, 130, 'rgba(120,235,185,.24)');
-  // sconces en la pared izquierda
-  for (const f of [0.28, 0.62]) {
-    const x = A.x + f * (B.x - A.x), y = A.y - 62 + f * (B.y - A.y);
-    radial(x, y, 105, 'rgba(255,205,125,.2)');
-  }
-  // resplandor frío de la luna dentro del cuarto
-  const moon = iso(10.9, 1.35);
-  radial(moon.x, moon.y - 70, 170, 'rgba(160,180,255,.16)');
-  // charco cálido ambiental en el cuarto
-  const warm = iso(10.2, 5.6);
-  radial(warm.x, warm.y, 190, 'rgba(255,200,130,.12)');
-  // viñeta
-  const cx = canvas.width / 2, cy = canvas.height / 2;
-  const vg = ctx.createRadialGradient(cx, cy, canvas.height * 0.38, cx, cy, canvas.width * 0.62);
-  vg.addColorStop(0, 'rgba(8,6,14,0)');
-  vg.addColorStop(1, 'rgba(8,6,14,.36)');
-  ctx.fillStyle = vg;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Pistas de circuito
+  ctx.strokeStyle = '#06b6d4';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(rx, ry, r * 0.65, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Núcleo central
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(rx - 16, ry - 16, 32, 32);
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillRect(rx - 8, ry - 8, 16, 16);
+
+  // Líneas bus
+  ctx.fillStyle = '#06b6d4';
+  ctx.fillRect(rx - r + 8, ry - 1, r * 2 - 16, 2);
+  ctx.fillRect(rx - 1, ry - r + 8, 2, r * 2 - 16);
+
   ctx.restore();
 }
 
-/* ── Render ───────────────────────────────────────────────── */
-let selected = null;
-let paused = false;
-const furniture = [
-  { depth: RUG.x + RUG.y - 1, draw: () => drawRug() },
-  { depth: S_RUG.x + S_RUG.y - 1, draw: () => drawOfficeRug() },
-  { depth: S_DESK.x + S_DESK.y + 0.1, draw: t => drawSergioDesk(t) },
-  { depth: S_SHELF.x + S_SHELF.y + 0.15, draw: t => drawShelf(t) },
-  { depth: SOFA.x + SOFA.y + 0.1, draw: () => drawSofa() },
-  { depth: S_TABLE.x + S_TABLE.y + 0.1, draw: () => drawCoffeeTable() },
-  { depth: S_LAMP.x + S_LAMP.y + 0.1, draw: () => drawOfficeLamp() },
-  ...DESKS.map(d => ({ depth: d.x + d.y + 0.1, draw: t => drawDesk(d, t) })),
-  { depth: SERVER.x + SERVER.y + 0.1, draw: t => drawServer(t) },
-  { depth: COFFEE.x + COFFEE.y + 0.1, draw: t => drawCoffee(t, npcs.some(n => n.state === 'coffee')) },
-  { depth: FLOOR_LAMP.x + FLOOR_LAMP.y + 0.1, draw: () => drawFloorLamp() },
-  ...PLANTS.map(pl => ({ depth: pl.x + pl.y + 0.1, draw: () => drawPlant(pl, true) })),
-  { depth: S_PLANT.x + S_PLANT.y + 0.1, draw: () => drawPlant(S_PLANT, true) },
-];
+function drawPlant(cx, cy) {
+  ctx.fillStyle = PAL.plantPot;
+  ctx.beginPath();
+  ctx.moveTo(cx + 6, cy + 20);
+  ctx.lineTo(cx + 26, cy + 20);
+  ctx.lineTo(cx + 22, cy + 32);
+  ctx.lineTo(cx + 10, cy + 32);
+  ctx.closePath();
+  ctx.fill();
 
-function render(t) {
+  ctx.fillStyle = PAL.plantGreen;
+  ctx.beginPath();
+  ctx.arc(cx + 12, cy + 12, 10, 0, Math.PI * 2);
+  ctx.arc(cx + 20, cy + 10, 11, 0, Math.PI * 2);
+  ctx.arc(cx + 16, cy + 6, 8, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#22c55e';
+  ctx.beginPath();
+  ctx.arc(cx + 14, cy + 10, 5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// ── Renderizado del Escenario ─────────────────────────────────
+function drawRoom() {
+  // 1. Suelo del Laboratorio (Cols 0 a 16)
+  for (let c = 0; c < 16; c++) {
+    for (let r = 2; r < ROWS; r++) {
+      const tileColor = ((c + r) % 2 === 0) ? PAL.labFloor1 : PAL.labFloor2;
+      ctx.fillStyle = tileColor;
+      ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+      ctx.strokeStyle = PAL.labBorder;
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(c * TILE, r * TILE, TILE, TILE);
+    }
+  }
+
+  // 2. Despacho Ejecutivo de Sergio (Cols 16 a 25)
+  for (let c = 16; c < COLS; c++) {
+    for (let r = 2; r < ROWS; r++) {
+      ctx.fillStyle = ((c + r) % 2 === 0) ? PAL.officeWood : PAL.officeWoodDark;
+      ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+    }
+  }
+
+  // Alfombra Ejecutiva de Sergio
+  const rugX = 17 * TILE;
+  const rugY = 3 * TILE;
+  const rugW = 7 * TILE;
+  const rugH = 10 * TILE;
+  ctx.fillStyle = PAL.carpetRed;
+  ctx.fillRect(rugX, rugY, rugW, rugH);
+  ctx.strokeStyle = PAL.carpetBorder;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(rugX + 4, rugY + 4, rugW - 8, rugH - 8);
+
+  // 3. Pared Norte
+  ctx.fillStyle = PAL.wallTop;
+  ctx.fillRect(0, 0, canvas.width, 24);
+  ctx.fillStyle = PAL.wallFront;
+  ctx.fillRect(0, 24, canvas.width, 2 * TILE - 24);
+  ctx.fillStyle = PAL.wallTrim;
+  ctx.fillRect(0, 2 * TILE - 4, canvas.width, 4);
+
+  // Ventana
+  drawWindow(20 * TILE, 6, 3 * TILE, 44);
+
+  // 4. Tabique divisorio
+  const partX = 16 * TILE;
+  ctx.fillStyle = PAL.partitionWood;
+  ctx.fillRect(partX, 2 * TILE, 8, 5 * TILE);
+  ctx.fillStyle = PAL.partitionTrim;
+  ctx.fillRect(partX + 8, 2 * TILE, 2, 5 * TILE);
+
+  // Puerta abierta en filas 7-8
+  ctx.fillStyle = PAL.partitionTrim;
+  ctx.fillRect(partX, 7 * TILE - 4, 10, 4);
+  ctx.fillRect(partX, 9 * TILE, 10, 4);
+
+  ctx.fillStyle = PAL.partitionWood;
+  ctx.fillRect(partX, 9 * TILE + 4, 8, 6 * TILE - 4);
+  ctx.fillStyle = PAL.partitionTrim;
+  ctx.fillRect(partX + 8, 9 * TILE + 4, 2, 6 * TILE - 4);
+
+  // Placa de latón
+  ctx.fillStyle = '#d97706';
+  ctx.fillRect(partX - 18, 5 * TILE, 16, 10);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(partX - 16, 5 * TILE + 4, 12, 2);
+}
+
+function drawWindow(x, y, w, h) {
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(x + 3, y + 3, w - 6, h - 6);
+  ctx.fillStyle = '#fef08a';
+  ctx.beginPath();
+  ctx.arc(x + w - 16, y + 16, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#020617';
+  ctx.beginPath();
+  ctx.arc(x + w - 20, y + 14, 7, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(x + 10, y + 10, 1, 1);
+  ctx.fillRect(x + 24, y + 20, 2, 2);
+  ctx.fillRect(x + 45, y + 8, 1, 1);
+}
+
+// ── Bucle de Renderizado ──────────────────────────────────────
+function render() {
+  if (!isPaused) {
+    globalTick++;
+  }
+
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  drawWalls();
-  drawFloor();
-  // sconces (artefactos) en pared izquierda
-  const A = iso(0, 0), B = iso(0, MAP_H);
-  for (const f of [0.28, 0.62]) {
-    const x = A.x + f * (B.x - A.x), y = A.y - 62 + f * (B.y - A.y);
-    ctx.fillStyle = '#3a2c14'; ctx.fillRect(x - 6, y - 3, 12, 6);
-    ctx.fillStyle = '#ffb64f'; ctx.fillRect(x - 4, y - 1, 8, 2);
-  }
-  // el tabique entra en el depth sort por tramos (partitionDraws, precalculado)
-  const drawables = [
-    ...furniture,
-    ...partitionDraws,
-    ...npcs.map(n => ({ depth: n.x + n.y + 0.2, draw: () => drawNPC(n, t) })),
-  ].sort((a, b) => a.depth - b.depth);
-  for (const d of drawables) d.draw(t);
-  drawLighting();
-  if (paused) {
-    ctx.fillStyle = 'rgba(10,8,18,.4)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#e0a43c'; ctx.font = 'bold 26px "Courier New", monospace'; ctx.textAlign = 'center';
-    ctx.fillText('| |  PAUSA', canvas.width / 2, 56);
-    ctx.textAlign = 'left';
-  }
+  drawRoom();
+
+  OBJECTS.forEach(obj => {
+    obj.draw(obj.x * TILE, obj.y * TILE);
+  });
+
+  Object.values(CHARACTERS).forEach(char => {
+    char.draw(char.x * TILE, char.y * TILE, globalTick);
+  });
+
+  requestAnimationFrame(render);
 }
 
-let last = now();
-function loop() {
-  const t = now();
-  const dt = Math.min((t - last) / 1000, 0.05);
-  last = t;
-  if (!paused) for (const n of npcs) updateNPC(n, dt, t);
-  render(t);
-  requestAnimationFrame(loop);
-}
-
-/* ── Interacción y panel ──────────────────────────────────── */
-function canvasPos(evt) {
+// ── Manejo de Clics ───────────────────────────────────────────
+canvas.addEventListener('click', (e) => {
+  initAudio();
   const rect = canvas.getBoundingClientRect();
-  return {
-    x: (evt.clientX - rect.left) * (canvas.width / rect.width),
-    y: (evt.clientY - rect.top) * (canvas.height / rect.height),
-  };
-}
-function pickNPC(pt) {
-  let best = null, bestD = 32;
-  for (const n of npcs) {
-    const p = iso(n.x, n.y);
-    const d = Math.hypot(p.x - pt.x, (p.y - 30) - pt.y);
-    if (d < bestD) { bestD = d; best = n; }
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+
+  const clickX = (e.clientX - rect.left) * scaleX;
+  const clickY = (e.clientY - rect.top) * scaleY;
+
+  const tileX = Math.floor(clickX / TILE);
+  const tileY = Math.floor(clickY / TILE);
+
+  // 1. Clic en personaje
+  for (const char of Object.values(CHARACTERS)) {
+    if (Math.abs(tileX - char.x) <= 1 && Math.abs(tileY - char.y) <= 1) {
+      char.state = 'talking';
+      const randomDialogue = char.dialogues[Math.floor(Math.random() * char.dialogues.length)];
+      showDialogue(char.name, randomDialogue, char.color);
+      playFanfare();
+      setTimeout(() => { char.state = 'working'; }, 3500);
+      return;
+    }
   }
-  return best;
-}
-canvas.addEventListener('click', evt => {
-  const hit = pickNPC(canvasPos(evt));
-  selected = hit;
-  if (hit) { hit.waveUntil = now() + 1200; blip(); }
-  renderFicha(); renderRoster();
+
+  // 2. Clic en mueble/máquina
+  for (const obj of OBJECTS) {
+    if (tileX >= obj.x && tileX < obj.x + obj.w &&
+        tileY >= obj.y && tileY < obj.y + obj.h) {
+      showDialogue(obj.name, obj.dialogue, '#0f172a');
+      playBip(700, 0.05);
+      return;
+    }
+  }
+
+  // 3. Clic en suelo
+  if (tileX >= 16) {
+    showDialogue("DESPACHO PRIVADO", "Despacho de Sergio. Área de arquitectura y diseño de software.", '#b45309');
+  } else {
+    showDialogue("LABORATORIO DE IA", "Área de computación local y orquestación de modelos.", '#0284c7');
+  }
+  playBip(440, 0.03);
 });
 
-const statusOf = n => STATUS[n.state === 'move' ? 'move' : n.state] || 'Tecleando';
+// ── Integración Real con la API de Ollama ─────────────────────
+async function checkOllamaStatus() {
+  try {
+    const res = await fetch('http://localhost:11434/api/tags');
+    if (!res.ok) throw new Error('Ollama no responde');
+    const data = await res.json();
+    
+    ollamaOnline = true;
+    const model = data.models && data.models[0] ? data.models[0].name : 'qwen2.5-coder:1.5b';
+    activeModelName = model;
 
-/* ── Panel lateral: roster ─────────────────────────────────── */
-/* Se construye UNA vez; cada tick solo actualiza texto de estado y la clase
-   `active` para no recrear el DOM ni perder clics. */
-let rosterBuilt = false;
-function buildRoster() {
-  const ul = document.getElementById('roster-list');
-  ul.innerHTML = '';
-  for (const n of npcs) {
-    const li = document.createElement('li');
-    li.className = 'roster-item';
-    const mini = document.createElement('canvas');
-    mini.width = 48; mini.height = 60; mini.className = 'avatar-mini';
-    const mg = mini.getContext('2d');
-    mg.imageSmoothingEnabled = false;
-    mg.drawImage(n.sprites[0], 0, 0, 48, 60);
-    li.appendChild(mini);
-    const mid = document.createElement('div');
-    mid.innerHTML = `<div class="name">${n.spec.name}</div><div class="role">${n.spec.role}</div>`;
-    li.appendChild(mid);
-    const st = document.createElement('div');
-    st.className = 'status'; st.textContent = statusOf(n);
-    li.appendChild(st);
-    li.addEventListener('click', () => { selected = n; n.waveUntil = now() + 1200; renderFicha(); renderRoster(); blip(); });
-    n.rosterLi = li; n.rosterStatus = st;
-    ul.appendChild(li);
-  }
-  rosterBuilt = true;
-}
-function renderRoster() {
-  if (!rosterBuilt) buildRoster();
-  for (const n of npcs) {
-    if (n.rosterStatus) n.rosterStatus.textContent = statusOf(n);
-    if (n.rosterLi) n.rosterLi.classList.toggle('active', selected === n);
+    ollamaDot.className = 'status-dot online';
+    ollamaStatusText.textContent = `${model} (En línea)`;
+
+    // Comprobar si hay procesos activos en /api/ps
+    try {
+      const psRes = await fetch('http://localhost:11434/api/ps');
+      if (psRes.ok) {
+        const psData = await psRes.json();
+        ollamaIsProcessing = (psData.models && psData.models.length > 0);
+      }
+    } catch (e) {}
+
+  } catch (err) {
+    ollamaOnline = false;
+    ollamaDot.className = 'status-dot offline';
+    ollamaStatusText.textContent = 'Desconectado';
   }
 }
-function renderFicha() {
-  const body = document.getElementById('ficha-body');
-  if (!selected) {
-    body.className = 'ficha-empty';
-    body.innerHTML = '<p>Ningún personaje seleccionado.</p><p class="ficha-sub">Haz clic en alguien de la sala para ver quién es y qué hace.</p>';
+
+// Enviar Prompt real a Ollama (localhost:11434)
+async function sendPromptToOllama(promptText) {
+  initAudio();
+  if (!promptText.trim()) return;
+
+  playBip(659, 0.08);
+  showDialogue("SERGIO", `Enviando a Qwen Local: "${promptText}"`, '#0284c7');
+
+  CHARACTERS.qwen.state = 'working';
+  ollamaIsProcessing = true;
+
+  try {
+    const res = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: activeModelName || 'qwen2.5-coder:1.5b',
+        prompt: promptText,
+        stream: false
+      })
+    });
+
+    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+    const data = await res.json();
+    const reply = (data.response || 'Sin respuesta del modelo').trim();
+
+    ollamaIsProcessing = false;
+    CHARACTERS.qwen.state = 'talking';
+    showDialogue("QWEN LOCAL", reply, '#16a34a');
+    playFanfare();
+
+    setTimeout(() => { CHARACTERS.qwen.state = 'working'; }, 8000);
+  } catch (err) {
+    ollamaIsProcessing = false;
+    CHARACTERS.qwen.state = 'working';
+    showDialogue("ERROR OLLAMA", `No se pudo conectar con Ollama en localhost:11434: ${err.message}`, '#ef4444');
+  }
+}
+
+// Manejo del formulario de terminal interactiva
+promptForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = promptInput.value;
+  if (!text.trim()) return;
+  promptInput.value = '';
+  sendPromptToOllama(text);
+});
+
+// ── Botones de Acción Rápida ──────────────────────────────────
+const actFiles = document.getElementById('act-files');
+if (actFiles) {
+  actFiles.addEventListener('click', () => openFilesModal());
+}
+
+// ── Explorador de Archivos de Python ──────────────────────────
+const filesModal = document.getElementById('files-modal');
+const btnFiles = document.getElementById('btn-files');
+const modalClose = document.getElementById('modal-close');
+const filesList = document.getElementById('files-list');
+const currentFilename = document.getElementById('current-filename');
+const fileContent = document.getElementById('file-content');
+const btnAnalyzeQwen = document.getElementById('btn-analyze-qwen');
+
+let loadedFiles = [];
+let currentSelectedFile = null;
+let currentSelectedCode = '';
+
+async function loadFiles() {
+  if (!filesList) return;
+  filesList.innerHTML = '<li class="file-item loading">Buscando archivos...</li>';
+  try {
+    const res = await fetch('/api/files');
+    if (!res.ok) throw new Error('No se pudo obtener la lista de archivos');
+    const data = await res.json();
+    loadedFiles = data.files || [];
+    renderFilesList();
+    if (loadedFiles.length > 0 && !currentSelectedFile) {
+      selectFile(loadedFiles[0].name);
+    }
+  } catch (err) {
+    filesList.innerHTML = `<li class="file-item error">Error: ${err.message}</li>`;
+  }
+}
+
+function renderFilesList() {
+  if (!filesList) return;
+  filesList.innerHTML = '';
+  if (loadedFiles.length === 0) {
+    filesList.innerHTML = '<li class="file-item">No se encontraron archivos .py</li>';
     return;
   }
-  const s = selected.spec;
-  body.className = '';
-  body.innerHTML = `
-    <p class="ficha-name" style="color:${s.accent}">${s.name}</p>
-    <p class="ficha-subtitle">${s.role}</p>
-    <p class="ficha-desc">${s.desc}</p>
-    <dl class="ficha-meta">
-      <dt>Representa</dt><dd>${s.represents}</dd>
-      <dt>Modelo</dt><dd>${s.model}</dd>
-      <dt>Hardware</dt><dd>${s.hw}</dd>
-    </dl>
-    <div class="ficha-status">Ahora mismo: <b>${statusOf(selected)}</b> <span style="opacity:.6">(simulado)</span></div>`;
+
+  loadedFiles.forEach(f => {
+    const li = document.createElement('li');
+    li.className = 'file-item' + (currentSelectedFile === f.name ? ' active' : '');
+    li.textContent = `🐍 ${f.name}`;
+    li.addEventListener('click', () => selectFile(f.name));
+    filesList.appendChild(li);
+  });
 }
 
-/* ── Barra superior ───────────────────────────────────────── */
-const clockEl = document.getElementById('clock');
-setInterval(() => { clockEl.textContent = new Date().toLocaleTimeString('es-ES', { hour12: false }); }, 1000);
+async function selectFile(filename) {
+  currentSelectedFile = filename;
+  renderFilesList();
+  currentFilename.textContent = `📄 ${filename}`;
+  fileContent.textContent = 'Cargando contenido...';
+  btnAnalyzeQwen.disabled = true;
 
-document.getElementById('btn-pause').addEventListener('click', e => {
-  paused = !paused;
-  e.currentTarget.textContent = paused ? 'Reanudar' : 'Pausar';
-});
-document.getElementById('btn-scatter').addEventListener('click', () => {
-  for (const n of npcs) { const p = pickTarget(); n.tx = p.tx; n.ty = p.ty; n.state = 'move'; n.onArrive = 'think'; }
-});
-
-let audioCtx = null, soundOn = false;
-const btnSound = document.getElementById('btn-sound');
-btnSound.addEventListener('click', () => {
-  soundOn = !soundOn;
-  btnSound.textContent = soundOn ? 'Sonido: on' : 'Sonido: off';
-  btnSound.setAttribute('aria-pressed', String(soundOn));
-});
-function blip() {
-  if (!soundOn) return;
   try {
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.type = 'square'; o.frequency.value = 740;
-    g.gain.setValueAtTime(0.06, audioCtx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.12);
-    o.connect(g); g.connect(audioCtx.destination);
-    o.start(); o.stop(audioCtx.currentTime + 0.12);
-  } catch (_) { /* sin audio */ }
+    const res = await fetch(`/api/file?name=${encodeURIComponent(filename)}`);
+    if (!res.ok) throw new Error('Error al leer el archivo');
+    const data = await res.json();
+    currentSelectedCode = data.content || '';
+    fileContent.textContent = currentSelectedCode;
+    btnAnalyzeQwen.disabled = false;
+  } catch (err) {
+    fileContent.textContent = `Error al leer archivo: ${err.message}`;
+  }
 }
 
-/* ── Arranque ─────────────────────────────────────────────── */
-for (const n of npcs) { n.x = n.spec.home.x; n.y = n.spec.home.y; }
-renderRoster();
-renderFicha();
-setInterval(renderRoster, 800);
-requestAnimationFrame(loop);
+function openFilesModal() {
+  initAudio();
+  playBip(587, 0.06);
+  if (filesModal) filesModal.hidden = false;
+  loadFiles();
+}
+
+function closeFilesModal() {
+  if (filesModal) filesModal.hidden = true;
+}
+
+if (btnFiles) btnFiles.addEventListener('click', openFilesModal);
+if (modalClose) modalClose.addEventListener('click', closeFilesModal);
+
+if (filesModal) {
+  filesModal.addEventListener('click', (e) => {
+    if (e.target === filesModal) closeFilesModal();
+  });
+}
+
+if (btnAnalyzeQwen) {
+  btnAnalyzeQwen.addEventListener('click', () => {
+    if (!currentSelectedFile || !currentSelectedCode) return;
+    closeFilesModal();
+    const prompt = `Analiza este script en Python de Sergio (${currentSelectedFile}):\n${currentSelectedCode}\nExplícale brevemente qué hace el código en dos oraciones claras.`;
+    sendPromptToOllama(prompt);
+  });
+}
+
+document.getElementById('act-work').addEventListener('click', () => {
+  sendPromptToOllama("¿Cuál es la diferencia entre una variable y una constante en programación? Respóndeme en dos oraciones cortas.");
+});
+
+document.getElementById('act-coffee').addEventListener('click', () => {
+  initAudio();
+  playBip(659, 0.08);
+  CHARACTERS.sergio.state = 'talking';
+  showDialogue("PAUSA PARA CAFÉ", "Sergio va a la cafetera espresso: 'Una buena arquitectura se piensa con una taza de café en mano.'", '#b45309');
+  setTimeout(() => { CHARACTERS.sergio.state = 'working'; }, 3500);
+});
+
+document.getElementById('act-reunion').addEventListener('click', () => {
+  initAudio();
+  playFanfare();
+  showDialogue("REUNIÓN TÉCNICA", "Sergio reúne al equipo: 'El sistema está limpio y Ollama responde en tiempo real. ¡Continuemos con el sprint!'", '#1d4ed8');
+});
+
+document.getElementById('act-info').addEventListener('click', async () => {
+  initAudio();
+  playBip(587, 0.05);
+  await checkOllamaStatus();
+  showDialogue("TELEMETRÍA EN TIEMPO REAL", `Ollama: ${ollamaOnline ? 'ACTIVO (localhost:11434)' : 'OFFLINE'} · Modelo: ${activeModelName} · Cloud: Antigravity CLI`, '#334155');
+});
+
+// ── Controles de Cabecera ─────────────────────────────────────
+btnSound.addEventListener('click', () => {
+  initAudio();
+  soundEnabled = !soundEnabled;
+  btnSound.textContent = soundEnabled ? '🔊 Sonido: ON' : '🔇 Sonido: OFF';
+  btnSound.style.borderColor = soundEnabled ? '#22c55e' : '#475569';
+  if (soundEnabled) playBip(880, 0.1);
+});
+
+btnPause.addEventListener('click', () => {
+  isPaused = !isPaused;
+  btnPause.textContent = isPaused ? '▶ Reanudar' : '⏸ Pausar';
+  btnPause.style.borderColor = isPaused ? '#eab308' : '#475569';
+});
+
+// ── Inicialización ────────────────────────────────────────────
+render();
+checkOllamaStatus();
+setInterval(checkOllamaStatus, 4000);
+
+setTimeout(() => {
+  showDialogue("SERGIO", "¡Centro de Control 2D en línea! Ollama conectado en vivo. Escribe un prompt abajo para probar a Qwen en tiempo real.", '#0284c7');
+}, 600);

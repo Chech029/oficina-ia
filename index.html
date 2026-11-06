@@ -3,60 +3,116 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>La Oficina de IA de Sergio</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%2314101f'/><rect x='4' y='10' width='24' height='18' fill='%23e0632f'/><rect x='12' y='18' width='8' height='10' fill='%23ffd257'/></svg>">
+  <title>Laboratorio de IA de Sergio · Centro de Control 2D</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231e293b'/><rect x='8' y='8' width='16' height='16' rx='3' fill='%2338bdf8'/><circle cx='16' cy='16' r='4' fill='%230f172a'/></svg>">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">▚▞</span>
-      <div>
-        <h1>La Oficina de IA de Sergio</h1>
-        <p class="tagline">Habbo de IAs · build 0.3 premium — una sola planta, tu cuarto incluido</p>
+  <div class="control-frame">
+    <!-- Topbar estilo estación de control -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="chip-icon" aria-hidden="true">
+          <span class="core-dot"></span>
+        </div>
+        <div>
+          <h1>Laboratorio de IA de Sergio</h1>
+          <p class="tagline">Centro de Mando 2D · Orquestación en Tiempo Real</p>
+        </div>
       </div>
-    </div>
-    <div class="top-actions">
-      <span id="clock" class="clock">--:--:--</span>
-      <button id="btn-pause" class="btn" type="button">Pausar</button>
-      <button id="btn-scatter" class="btn" type="button">Repartir</button>
-      <button id="btn-sound" class="btn" type="button" aria-pressed="false">Sonido: off</button>
-    </div>
-  </header>
 
-  <main class="stage">
-    <div class="canvas-wrap">
-      <canvas id="sala" width="1060" height="640" role="img" aria-label="Sala isométrica pixel-art: la oficina de Sergio con Sergio, Qwen, Pulse y Gemini trabajando"></canvas>
-      <div class="scanlines" aria-hidden="true"></div>
-      <p class="hint">Haz clic en un personaje para ver su ficha · tu cuarto está a la derecha del tabique</p>
-    </div>
+      <div class="top-status">
+        <div class="status-badge" id="status-ollama-badge">
+          <span class="status-dot" id="ollama-dot"></span> Ollama: <b id="ollama-status-text">Conectando...</b>
+        </div>
+        <div class="status-badge" id="status-cloud-badge">
+          <span class="status-dot cloud"></span> Nube: <b>Antigravity</b>
+        </div>
+      </div>
 
-    <aside class="panel" aria-label="Panel de la oficina">
-      <section class="roster">
-        <h2>Plantilla</h2>
-        <ul id="roster-list"></ul>
-      </section>
+      <div class="top-controls">
+        <button id="btn-files" class="retro-btn highlight" type="button">📁 Mis Archivos</button>
+        <button id="btn-sound" class="retro-btn" type="button" title="Activar/desactivar sonido 8-bit">🔊 Sonido: OFF</button>
+        <button id="btn-pause" class="retro-btn" type="button">⏸ Pausar</button>
+      </div>
+    </header>
 
-      <section class="ficha" id="ficha">
-        <h2>Ficha</h2>
-        <div id="ficha-body" class="ficha-empty">
-          <p>Ningún personaje seleccionado.</p>
-          <p class="ficha-sub">Haz clic en alguien de la sala para ver quién es y qué hace.</p>
+    <!-- Pantalla de simulación 2D (Canvas) -->
+    <main class="stage">
+      <div class="screen-container">
+        <canvas id="sala" width="800" height="480" aria-label="Laboratorio de IA en vista 2D"></canvas>
+      </div>
+
+      <!-- Cuadro de Diálogo Retro -->
+      <section class="dialogue-container">
+        <div class="retro-dialogue-box" id="dialogue-box">
+          <div class="speaker-tag" id="dialogue-speaker">SERGIO</div>
+          <div class="dialogue-content">
+            <p id="dialogue-text">Conectando con el motor local de Ollama...</p>
+          </div>
+          <div class="dialogue-arrow" id="dialogue-arrow">▼</div>
         </div>
       </section>
 
-      <section class="leyenda">
-        <h2>Estado (simulado)</h2>
-        <ul class="legend-list">
-          <li><span class="dot typing"></span> Tecleando</li>
-          <li><span class="dot walking"></span> Caminando</li>
-          <li><span class="dot coffee"></span> En la cafetera</li>
-          <li><span class="dot thinking"></span> Pensando</li>
-        </ul>
-        <p class="note">Los estados son ficticios por ahora. El siguiente hito: estado real vía Ollama <code>/api/ps</code>, API de OpenCode y logs de dsh/Antigravity.</p>
+      <!-- Terminal interactiva para enviar prompts a Ollama en vivo -->
+      <section class="terminal-bar-container">
+        <form id="prompt-form" class="terminal-form">
+          <span class="terminal-prompt-sym">❯</span>
+          <input type="text" id="prompt-input" class="terminal-input" 
+                 placeholder="Escribe un prompt para Qwen Local (ej: ¿Cómo funciona un bucle for en Python?)..." 
+                 autocomplete="off" />
+          <button type="submit" id="btn-send" class="btn-send">
+            <span class="send-icon">⚡</span> Ejecutar
+          </button>
+        </form>
       </section>
-    </aside>
-  </main>
+
+      <!-- Panel de Acciones Rápidas -->
+      <footer class="action-dock">
+        <button class="action-btn" id="act-files" type="button">
+          <span class="action-key">1</span>
+          <span class="action-label">📁 Ver Archivos</span>
+        </button>
+        <button class="action-btn" id="act-work" type="button">
+          <span class="action-key">2</span>
+          <span class="action-label">⚡ Probar Ollama</span>
+        </button>
+        <button class="action-btn" id="act-coffee" type="button">
+          <span class="action-key">3</span>
+          <span class="action-label">☕ Pausa Café</span>
+        </button>
+        <button class="action-btn" id="act-info" type="button">
+          <span class="action-key">4</span>
+          <span class="action-label">🔍 Telemetría</span>
+        </button>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Modal Explorador de Archivos de Python -->
+  <div id="files-modal" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">📁 Mis Scripts en ~/Escritorio/Python/</div>
+        <button id="modal-close" class="modal-close-btn" type="button" aria-label="Cerrar modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <aside class="files-sidebar">
+          <div class="sidebar-heading">Archivos Disponibles</div>
+          <ul id="files-list" class="files-list">
+            <li class="file-item loading">Cargando archivos...</li>
+          </ul>
+        </aside>
+        <section class="file-viewer">
+          <div class="viewer-header">
+            <span id="current-filename" class="viewer-fname">Ningún archivo seleccionado</span>
+            <button id="btn-analyze-qwen" class="btn-analyze" type="button" disabled>⚡ Analizar con Qwen</button>
+          </div>
+          <pre id="file-content" class="code-content">Elige un archivo de la lista para ver su código fuente...</pre>
+        </section>
+      </div>
+    </div>
+  </div>
 
   <script src="oficina.js"></script>
 </body>
