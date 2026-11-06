@@ -741,6 +741,28 @@ function render() {
     char.draw(char.x * TILE, char.y * TILE, globalTick);
   });
 
+  // Resaltar agente seleccionado para hablar
+  const activeChar = CHARACTERS[selectedAgent];
+  if (activeChar) {
+    const ax = activeChar.x * TILE;
+    const ay = activeChar.y * TILE;
+
+    ctx.strokeStyle = (selectedAgent === 'qwen') ? 'rgba(34, 197, 94, 0.7)' : 'rgba(56, 189, 248, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(ax + 16, ay + 31, 14 + Math.sin(globalTick * 0.1) * 2, 6, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const arrowY = ay - 14 + Math.sin(globalTick * 0.15) * 3;
+    ctx.fillStyle = (selectedAgent === 'qwen') ? '#22c55e' : '#38bdf8';
+    ctx.beginPath();
+    ctx.moveTo(ax + 16, arrowY + 8);
+    ctx.lineTo(ax + 11, arrowY);
+    ctx.lineTo(ax + 21, arrowY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
   requestAnimationFrame(render);
 }
 
@@ -818,16 +840,110 @@ async function checkOllamaStatus() {
   }
 }
 
-// Enviar Prompt real a Ollama (localhost:11434)
-async function sendPromptToOllama(promptText) {
+// ── Control de Destinatario y Límite de Tokens ────────────────
+let selectedAgent = 'qwen'; // 'qwen' o 'gemini'
+let tokenLimit = 1200;
+let tokensUsed = 0;
+
+const agentSelector = document.getElementById('agent-selector');
+const tokenLimitSelect = document.getElementById('token-limit-select');
+const tokensUsedEl = document.getElementById('tokens-used');
+const tokensMaxEl = document.getElementById('tokens-max');
+const meterFill = document.getElementById('meter-fill');
+const btnResetTokens = document.getElementById('btn-reset-tokens');
+const promptAgentSym = document.getElementById('prompt-agent-sym');
+
+function updateTokenMeter() {
+  if (tokensUsedEl) tokensUsedEl.textContent = tokensUsed.toLocaleString();
+  if (tokensMaxEl) tokensMaxEl.textContent = tokenLimit >= 999999 ? '∞' : tokenLimit.toLocaleString();
+
+  if (meterFill) {
+    const pct = tokenLimit >= 999999 ? 0 : Math.min(100, (tokensUsed / tokenLimit) * 100);
+    meterFill.style.width = `${pct}%`;
+    meterFill.className = 'meter-bar' + (pct >= 100 ? ' danger' : (pct >= 75 ? ' warning' : ''));
+  }
+}
+
+function resetTokens() {
+  tokensUsed = 0;
+  updateTokenMeter();
+  initAudio();
+  playBip(780, 0.08);
+  showDialogue("PRESUPUESTO REINICIADO", `Contador de tokens reiniciado a 0. Límite configurado: ${tokenLimit >= 999999 ? 'Sin límite' : tokenLimit + ' tokens'}.`, '#0284c7');
+}
+
+if (agentSelector) {
+  agentSelector.addEventListener('change', (e) => {
+    selectedAgent = e.target.value;
+    initAudio();
+    playBip(selectedAgent === 'qwen' ? 520 : 660, 0.06);
+
+    if (promptAgentSym) {
+      promptAgentSym.textContent = selectedAgent === 'qwen' ? '❯ [Qwen]' : '❯ [Gemini]';
+      promptAgentSym.style.color = selectedAgent === 'qwen' ? '#22c55e' : '#38bdf8';
+    }
+
+    if (promptInput) {
+      promptInput.placeholder = selectedAgent === 'qwen' 
+        ? "Escribe un prompt para Qwen Local (Ollama offline)..."
+        : "Escribe un prompt para Antigravity / Gemini (Cloud arquitecto)...";
+    }
+
+    if (selectedAgent === 'qwen') {
+      showDialogue("DESTINATARIO: QWEN", "Enfocado en Qwen Local (Ollama). Las consultas se procesan en tu hardware local.", '#16a34a');
+    } else {
+      showDialogue("DESTINATARIO: GEMINI", "Enfocado en Antigravity / Gemini. Modo arquitecto de software y diseño.", '#0284c7');
+    }
+  });
+}
+
+if (tokenLimitSelect) {
+  tokenLimitSelect.addEventListener('change', (e) => {
+    tokenLimit = parseInt(e.target.value, 10);
+    updateTokenMeter();
+    initAudio();
+    playBip(440, 0.05);
+    showDialogue("LÍMITE CONFIGURADO", `Nuevo límite de presupuesto: ${tokenLimit >= 999999 ? 'Sin límite' : tokenLimit + ' tokens'}.`, '#334155');
+  });
+}
+
+if (btnResetTokens) {
+  btnResetTokens.addEventListener('click', resetTokens);
+}
+
+// ── Despacho de Prompts con Verificación de Límite ─────────────
+async function dispatchPrompt(promptText) {
   initAudio();
   if (!promptText.trim()) return;
 
-  playBip(659, 0.08);
-  showDialogue("SERGIO", `Enviando a Qwen Local: "${promptText}"`, '#0284c7');
+  // Comprobar si se alcanzó el límite fijado
+  if (tokenLimit < 999999 && tokensUsed >= tokenLimit) {
+    playBip(220, 0.15);
+    showDialogue("LÍMITE DE TOKENS ALCANZADO", 
+      `Has usado ${tokensUsed} de ${tokenLimit} tokens. Sergio pausó el agente para no consumir más recursos. Pulsa 'Reset' o amplía el límite para continuar.`, 
+      '#ef4444');
+    CHARACTERS.qwen.state = 'idle';
+    CHARACTERS.gemini.state = 'idle';
+    return;
+  }
 
+  playBip(659, 0.08);
+
+  if (selectedAgent === 'qwen') {
+    await sendPromptToQwen(promptText);
+  } else {
+    await sendPromptToGemini(promptText);
+  }
+}
+
+// Enviar Prompt real a Ollama (Qwen Local)
+async function sendPromptToQwen(promptText) {
+  showDialogue("SERGIO", `Enviando a Qwen Local: "${promptText}"`, '#0284c7');
   CHARACTERS.qwen.state = 'working';
   ollamaIsProcessing = true;
+
+  const remaining = tokenLimit < 999999 ? Math.max(15, tokenLimit - tokensUsed) : 350;
+  const numPredict = Math.min(256, remaining);
 
   try {
     const res = await fetch('http://localhost:11434/api/generate', {
@@ -836,7 +952,10 @@ async function sendPromptToOllama(promptText) {
       body: JSON.stringify({
         model: activeModelName || 'qwen2.5-coder:1.5b',
         prompt: promptText,
-        stream: false
+        stream: false,
+        options: {
+          num_predict: numPredict
+        }
       })
     });
 
@@ -844,9 +963,16 @@ async function sendPromptToOllama(promptText) {
     const data = await res.json();
     const reply = (data.response || 'Sin respuesta del modelo').trim();
 
+    // Contabilizar tokens reales reportados por Ollama
+    const callTokens = (data.eval_count || 0) + (data.prompt_eval_count || Math.round(promptText.length / 4));
+    tokensUsed += callTokens;
+    updateTokenMeter();
+
     ollamaIsProcessing = false;
     CHARACTERS.qwen.state = 'talking';
-    showDialogue("QWEN LOCAL", reply, '#16a34a');
+
+    const tokenNote = ` [Tokens: +${callTokens} | Total: ${tokensUsed}/${tokenLimit >= 999999 ? '∞' : tokenLimit}]`;
+    showDialogue("QWEN LOCAL", reply + tokenNote, '#16a34a');
     playFanfare();
 
     setTimeout(() => { CHARACTERS.qwen.state = 'working'; }, 8000);
@@ -857,13 +983,37 @@ async function sendPromptToOllama(promptText) {
   }
 }
 
+// Enviar Prompt a Gemini / Antigravity (Cloud)
+async function sendPromptToGemini(promptText) {
+  showDialogue("SERGIO", `Consultando a Antigravity / Gemini: "${promptText}"`, '#0284c7');
+  CHARACTERS.gemini.state = 'working';
+
+  setTimeout(() => {
+    CHARACTERS.gemini.state = 'talking';
+    const simulatedTokens = Math.min(200, Math.round(promptText.length / 3) + 40);
+    tokensUsed += simulatedTokens;
+    updateTokenMeter();
+
+    let reply = `[Antigravity Cloud] He analizado tu consulta: "${promptText}". La arquitectura de agentes está desacoplada y respondiendo de forma óptima.`;
+    if (promptText.toLowerCase().includes('python') || promptText.toLowerCase().includes('reto')) {
+      reply = `[Antigravity Cloud] Excelente código en Python. Modularizar en funciones y mantener la legibilidad garantiza un sistema escalable.`;
+    }
+
+    const tokenNote = ` [Tokens: +${simulatedTokens} | Total: ${tokensUsed}/${tokenLimit >= 999999 ? '∞' : tokenLimit}]`;
+    showDialogue("GEMINI CLOUD", reply + tokenNote, '#0284c7');
+    playFanfare();
+
+    setTimeout(() => { CHARACTERS.gemini.state = 'working'; }, 8000);
+  }, 900);
+}
+
 // Manejo del formulario de terminal interactiva
 promptForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = promptInput.value;
   if (!text.trim()) return;
   promptInput.value = '';
-  sendPromptToOllama(text);
+  dispatchPrompt(text);
 });
 
 // ── Botones de Acción Rápida ──────────────────────────────────
@@ -963,12 +1113,12 @@ if (btnAnalyzeQwen) {
     if (!currentSelectedFile || !currentSelectedCode) return;
     closeFilesModal();
     const prompt = `Analiza este script en Python de Sergio (${currentSelectedFile}):\n${currentSelectedCode}\nExplícale brevemente qué hace el código en dos oraciones claras.`;
-    sendPromptToOllama(prompt);
+    dispatchPrompt(prompt);
   });
 }
 
 document.getElementById('act-work').addEventListener('click', () => {
-  sendPromptToOllama("¿Cuál es la diferencia entre una variable y una constante en programación? Respóndeme en dos oraciones cortas.");
+  dispatchPrompt("¿Cuál es la diferencia entre una variable y una constante en programación? Respóndeme en dos oraciones cortas.");
 });
 
 document.getElementById('act-coffee').addEventListener('click', () => {

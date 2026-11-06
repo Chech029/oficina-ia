@@ -54,15 +54,51 @@
         </div>
       </section>
 
-      <!-- Terminal interactiva para enviar prompts a Ollama en vivo -->
+      <!-- Panel de Control de Agente y Límite de Tokens -->
+      <section class="agent-control-bar">
+        <div class="control-group">
+          <label for="agent-selector" class="ctrl-label">Hablar con:</label>
+          <select id="agent-selector" class="retro-select">
+            <option value="qwen" selected>🟢 Qwen Local (Ollama)</option>
+            <option value="gemini">🔵 Antigravity / Gemini (Cloud)</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label for="token-limit-select" class="ctrl-label">Límite de Tokens:</label>
+          <select id="token-limit-select" class="retro-select">
+            <option value="300">300 tokens</option>
+            <option value="600">600 tokens</option>
+            <option value="1200" selected>1.200 tokens</option>
+            <option value="3000">3.000 tokens</option>
+            <option value="999999">Sin límite (∞)</option>
+          </select>
+        </div>
+
+        <div class="token-meter-container">
+          <div class="meter-info">
+            <span class="meter-title">Presupuesto de Tokens:</span>
+            <span class="meter-count"><b id="tokens-used">0</b> / <span id="tokens-max">1200</span></span>
+          </div>
+          <div class="meter-track">
+            <div id="meter-fill" class="meter-bar" style="width: 0%;"></div>
+          </div>
+        </div>
+
+        <button id="btn-reset-tokens" class="btn-meter-reset" type="button" title="Reiniciar contador de tokens">
+          ↺ Reset
+        </button>
+      </section>
+
+      <!-- Terminal interactiva para enviar prompts en vivo -->
       <section class="terminal-bar-container">
         <form id="prompt-form" class="terminal-form">
-          <span class="terminal-prompt-sym">❯</span>
+          <span class="terminal-prompt-sym" id="prompt-agent-sym">❯ [Qwen]</span>
           <input type="text" id="prompt-input" class="terminal-input" 
                  placeholder="Escribe un prompt para Qwen Local (ej: ¿Cómo funciona un bucle for en Python?)..." 
                  autocomplete="off" />
           <button type="submit" id="btn-send" class="btn-send">
-            <span class="send-icon">⚡</span> Ejecutar
+            <span class="send-icon">⚡</span> Enviar
           </button>
         </form>
       </section>
